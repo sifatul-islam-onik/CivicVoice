@@ -112,6 +112,6 @@ if (defined('DEVELOPMENT') && DEVELOPMENT) {
     ini_set('display_errors', 0);
 }
 
-// Timezone setting
+// Timezone settings
 date_default_timezone_set('Asia/Dhaka');
 ?>
