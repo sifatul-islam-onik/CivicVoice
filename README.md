@@ -1,5 +1,5 @@
 
-# CivicVoice
+# CivicVoice 
 
 **CSE 3120: Information Systems Design Laboratory**
 
@@ -37,5 +37,4 @@ CivicVoice is a community-driven platform that empowers citizens to report local
 - Ishrat Binte Ahmed (2107019)
 - Md Saif Ahmed Shejan (2107009)
 
-## License
-This project is licensed under the MIT License.
+
