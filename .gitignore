@@ -28,10 +28,6 @@ config.php
 uploads/
 assets/images/uploads/
 
-# Ignore database dumps
-*.sql
-*.sqlite
-
 # Ignore cache
 cache/
 *.cache
