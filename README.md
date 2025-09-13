@@ -32,28 +32,6 @@ CivicVoice is a community-driven platform that empowers citizens to report local
 4. **Access the application:**
    - Open your browser and navigate to `http://localhost/CivicVoice`.
 
-## Folder Structure
-```
-CivicVoice/
-├── index.html
-├── assets/
-│   ├── css/
-│   ├── js/
-│   └── images/
-├── includes/
-│   ├── header.php
-│   ├── footer.php
-│   └── ...
-├── api/
-│   └── ...
-├── config.php
-└── ...
-```
-
-## Contributing
-Contributions are welcome! Please open issues or submit pull requests for improvements.
-
-
 ## Collaborators
 - Md Sifatul Islam (2107016)
 - Ishrat Binte Ahmed (2107019)
