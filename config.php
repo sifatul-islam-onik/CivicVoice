@@ -103,7 +103,7 @@ function emailExists($email) {
     }
 }
 
-// Error reporting (disable in production)
+// Error reporting (disable in productions
 if (defined('DEVELOPMENT') && DEVELOPMENT) {
     error_reporting(E_ALL);
     ini_set('display_errors', 1);
