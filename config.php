@@ -1,5 +1,5 @@
 <?php
-// Database configuration for CivicVoice
+// Database configuration for CivicVoice (comment changed)
 
 // Start session if not already started
 if (session_status() === PHP_SESSION_NONE) {
