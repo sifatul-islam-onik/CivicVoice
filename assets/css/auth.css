@@ -1,12 +1,15 @@
 /* Authentication Pages Styling */
 
 /* Auth Container */
+body{
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
 .auth-container {
     min-height: 100vh;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     padding: 20px;
 }
 
@@ -77,6 +80,7 @@
     font-size: 1rem;
     transition: all 0.3s ease;
     background-color: #f8f9fa;
+    box-sizing: border-box;
 }
 
 .form-group input:focus,

@@ -114,6 +114,7 @@ body {
 
 /* Hero Section */
 .hero {
+    padding-top: 100px;
     min-height: 100vh;
     display: flex;
     align-items: center;
@@ -391,6 +392,8 @@ section {
 /* About Section */
 .about {
     background: #f9fafb;
+    padding-left: 1.05rem;
+    padding-right: 1.05rem;
 }
 
 .about-content {
@@ -547,10 +550,10 @@ section {
 @media (max-width: 768px) {
     .nav-menu {
         position: fixed;
-        top: 80px;
+        top: 70px;
         left: -100%;
         width: 100%;
-        height: calc(100vh - 80px);
+        height: calc(100vh - 70px);
         background: white;
         flex-direction: column;
         justify-content: flex-start;
@@ -595,19 +598,24 @@ section {
 
     .about-content {
         grid-template-columns: 1fr;
-        text-align: center;
+        /* text-align: center; */
     }
-
+    .cta{
+        padding-top: 10rem;
+        padding-bottom: 10rem;
+    }
     .cta-buttons {
         flex-direction: column;
         align-items: center;
     }
-
+    .footer-logo{
+        justify-content: center;
+    }
     .footer-content {
         grid-template-columns: 1fr;
         text-align: center;
+        padding-bottom: 1rem;
     }
-
     section {
         padding: 3rem 0;
     }
