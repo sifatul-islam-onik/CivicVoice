@@ -23,6 +23,15 @@ define('SESSION_LIFETIME', 7200); // 2 hours
 define('PASSWORD_MIN_LENGTH', 6);
 define('BCRYPT_COST', 12);
 
+// Email configuration - Gmail SMTP
+define('MAIL_HOST', 'smtp.gmail.com');        // Gmail SMTP server
+define('MAIL_PORT', 587);                     // Gmail SMTP port (587 for TLS, 465 for SSL)
+define('MAIL_USERNAME', 'lostlink.dev@gmail.com'); // Your Gmail address
+define('MAIL_PASSWORD', 'kcrneiuyrhpzwxuk');     // Gmail App Password (NOT regular password)
+define('MAIL_FROM_EMAIL', 'lostlink.dev@gmail.com'); // Same as username
+define('MAIL_FROM_NAME', 'CivicVoice Support');
+define('MAIL_ENCRYPTION', 'tls');             // Use 'tls' for port 587, 'ssl' for port 465
+
 // Create database connection
 try {
     $pdo = new PDO(

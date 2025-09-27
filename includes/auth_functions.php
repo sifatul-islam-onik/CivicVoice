@@ -1,12 +1,16 @@
 <?php
-// Authentication helper functions for CivicVoice
 
-// Check if user is logged in
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\Exception;
+
+require_once __DIR__ . '/../PHPMailer/src/PHPMailer.php';
+require_once __DIR__ . '/../PHPMailer/src/SMTP.php';
+require_once __DIR__ . '/../PHPMailer/src/Exception.php';
+
 function isLoggedIn() {
     return isset($_SESSION['logged_in']) && $_SESSION['logged_in'] === true && isset($_SESSION['user_id']);
 }
 
-// Get current user data
 function getCurrentUser() {
     if (!isLoggedIn()) {
         return null;
@@ -21,12 +25,10 @@ function getCurrentUser() {
     ];
 }
 
-// Check if user has specific role
 function hasRole($role) {
     return isLoggedIn() && $_SESSION['role'] === $role;
 }
 
-// Check if user has any of the specified roles
 function hasAnyRole($roles) {
     if (!isLoggedIn()) {
         return false;
@@ -35,7 +37,6 @@ function hasAnyRole($roles) {
     return in_array($_SESSION['role'], $roles);
 }
 
-// Require login - redirect to login page if not logged in
 function requireLogin() {
     if (!isLoggedIn()) {
         $current_url = $_SERVER['REQUEST_URI'];
@@ -44,7 +45,6 @@ function requireLogin() {
     }
 }
 
-// Require specific role
 function requireRole($role) {
     requireLogin();
     
@@ -54,7 +54,6 @@ function requireRole($role) {
     }
 }
 
-// Require any of the specified roles
 function requireAnyRole($roles) {
     requireLogin();
     
@@ -64,17 +63,12 @@ function requireAnyRole($roles) {
     }
 }
 
-// Create user session
 function createUserSession($userId, $rememberMe = false) {
-    // Generate session token
     $sessionToken = bin2hex(random_bytes(32));
-    
-    // Set expiration time
     $expiresAt = $rememberMe ? 
         date('Y-m-d H:i:s', strtotime('+30 days')) : 
         date('Y-m-d H:i:s', strtotime('+' . SESSION_LIFETIME . ' seconds'));
-    
-    // Store session in database
+
     try {
         executeQuery(
             "INSERT INTO user_sessions (user_id, session_token, expires_at, ip_address, user_agent) VALUES (?, ?, ?, ?, ?)",
@@ -86,15 +80,13 @@ function createUserSession($userId, $rememberMe = false) {
                 $_SERVER['HTTP_USER_AGENT'] ?? null
             ]
         );
-        
-        // Set session cookie
+
         if ($rememberMe) {
             setcookie('session_token', $sessionToken, strtotime('+30 days'), '/', '', false, true);
         } else {
             setcookie('session_token', $sessionToken, 0, '/', '', false, true);
         }
-        
-        // Clean up expired sessions
+
         cleanupExpiredSessions();
         
     } catch (Exception $e) {
@@ -102,7 +94,6 @@ function createUserSession($userId, $rememberMe = false) {
     }
 }
 
-// Validate session token
 function validateSessionToken($token) {
     try {
         $stmt = executeQuery(
@@ -120,7 +111,6 @@ function validateSessionToken($token) {
     }
 }
 
-// Clean up expired sessions
 function cleanupExpiredSessions() {
     try {
         executeQuery("DELETE FROM user_sessions WHERE expires_at < NOW()");
@@ -129,30 +119,22 @@ function cleanupExpiredSessions() {
     }
 }
 
-// Logout user
 function logout() {
-    // Remove session from database
     if (isset($_COOKIE['session_token'])) {
         try {
             executeQuery("DELETE FROM user_sessions WHERE session_token = ?", [$_COOKIE['session_token']]);
         } catch (Exception $e) {
             error_log("Session removal error: " . $e->getMessage());
         }
-        
-        // Clear session cookie
         setcookie('session_token', '', time() - 3600, '/', '', false, true);
     }
     
-    // Clear session variables
     $_SESSION = [];
-    
-    // Destroy session
     if (session_status() === PHP_SESSION_ACTIVE) {
         session_destroy();
     }
 }
 
-// Redirect to appropriate dashboard based on role
 function redirectToDashboard() {
     if (!isLoggedIn()) {
         header("Location: login.php");
@@ -162,23 +144,19 @@ function redirectToDashboard() {
     $redirectUrl = $_GET['redirect'] ?? '';
     
     if ($redirectUrl && filter_var($redirectUrl, FILTER_VALIDATE_URL) === false) {
-        // Local redirect
         header("Location: " . $redirectUrl);
         exit();
     }
-    
-    // Default redirects based on role - all roles use the same dashboard
+
     header("Location: dashboard.php");
     exit();
 }
 
-// Check and restore session from cookie
 function checkAndRestoreSession() {
     if (!isLoggedIn() && isset($_COOKIE['session_token'])) {
         $user = validateSessionToken($_COOKIE['session_token']);
         
         if ($user) {
-            // Restore session
             $_SESSION['user_id'] = $user['id'];
             $_SESSION['username'] = $user['username'];
             $_SESSION['full_name'] = $user['full_name'];
@@ -186,13 +164,11 @@ function checkAndRestoreSession() {
             $_SESSION['role'] = $user['role'];
             $_SESSION['logged_in'] = true;
         } else {
-            // Invalid token, clear cookie
             setcookie('session_token', '', time() - 3600, '/', '', false, true);
         }
     }
 }
 
-// Get user's full name or username
 function getUserDisplayName() {
     if (!isLoggedIn()) {
         return 'Guest';
@@ -201,7 +177,7 @@ function getUserDisplayName() {
     return $_SESSION['full_name'] ?? $_SESSION['username'] ?? 'User';
 }
 
-// Generate CSRF token
+
 function generateCSRFToken() {
     if (!isset($_SESSION['csrf_token'])) {
         $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
@@ -209,12 +185,10 @@ function generateCSRFToken() {
     return $_SESSION['csrf_token'];
 }
 
-// Validate CSRF token
 function validateCSRFToken($token) {
     return isset($_SESSION['csrf_token']) && hash_equals($_SESSION['csrf_token'], $token);
 }
 
-// Get user avatar or default
 function getUserAvatar($userId = null) {
     if (!$userId && isLoggedIn()) {
         $userId = $_SESSION['user_id'];
@@ -232,6 +206,277 @@ function getUserAvatar($userId = null) {
     return 'assets/images/default-avatar.png';
 }
 
-// Check session on every page load
 checkAndRestoreSession();
+
+function generatePasswordResetOTP($userId, $email) {
+    try {
+        $otpCode = sprintf('%06d', random_int(100000, 999999));
+        $token = bin2hex(random_bytes(32));
+        $expiresAt = date('Y-m-d H:i:s', strtotime('+10 minutes'));
+        
+        executeQuery(
+            "UPDATE password_reset_tokens SET used = 1, used_at = NOW() WHERE user_id = ? AND used = 0",
+            [$userId]
+        );
+        
+        executeQuery(
+            "INSERT INTO password_reset_tokens (user_id, email, otp_code, token, expires_at) VALUES (?, ?, ?, ?, ?)",
+            [$userId, $email, $otpCode, $token, $expiresAt]
+        );
+        
+        $emailResult = sendPasswordResetOTP($email, $otpCode, $userId);
+        
+        if ($emailResult['success']) {
+            return [
+                'success' => true,
+                'message' => 'OTP sent successfully.',
+                'token' => $token, // Session token for verification
+                'expires_minutes' => 10
+            ];
+        } else {
+            return [
+                'success' => false,
+                'message' => 'Failed to send OTP email.'
+            ];
+        }
+        
+    } catch (Exception $e) {
+        error_log("Password reset OTP generation error: " . $e->getMessage());
+        return [
+            'success' => false,
+            'message' => 'Unable to generate password reset OTP.'
+        ];
+    }
+}
+
+function validatePasswordResetOTP($email, $otpCode) {
+    if (empty($email) || empty($otpCode)) {
+        return [
+            'valid' => false,
+            'message' => 'Email and OTP code are required.',
+            'user_id' => null
+        ];
+    }
+
+    try {
+        // Find valid OTP token
+        $stmt = executeQuery(
+            "SELECT id, user_id, token, expires_at, attempts FROM password_reset_tokens 
+             WHERE email = ? AND otp_code = ? AND used = 0 AND expires_at > NOW() 
+             ORDER BY created_at DESC LIMIT 1",
+            [$email, $otpCode]
+        );
+
+        $resetToken = $stmt->fetch();
+
+        if (!$resetToken) {
+            // Check if there's an expired or used token
+            $stmt = executeQuery(
+                "SELECT id FROM password_reset_tokens WHERE email = ? AND otp_code = ? 
+                 ORDER BY created_at DESC LIMIT 1",
+                [$email, $otpCode]
+            );
+            
+            if ($stmt->fetch()) {
+                return [
+                    'valid' => false,
+                    'message' => 'OTP code has expired or already been used.',
+                    'user_id' => null
+                ];
+            } else {
+                // Increment attempts for rate limiting
+                executeQuery(
+                    "UPDATE password_reset_tokens SET attempts = attempts + 1 
+                     WHERE email = ? AND used = 0 AND expires_at > NOW()",
+                    [$email]
+                );
+                
+                return [
+                    'valid' => false,
+                    'message' => 'Invalid OTP code.',
+                    'user_id' => null
+                ];
+            }
+        }
+
+        return [
+            'valid' => true,
+            'message' => 'OTP code is valid.',
+            'user_id' => $resetToken['user_id'],
+            'token' => $resetToken['token'],
+            'reset_id' => $resetToken['id']
+        ];
+
+    } catch (Exception $e) {
+        error_log("Password reset OTP validation error: " . $e->getMessage());
+        return [
+            'valid' => false,
+            'message' => 'Unable to validate OTP code.',
+            'user_id' => null
+        ];
+    }
+}
+
+function resetPasswordWithOTP($email, $otpCode, $newPassword) {
+    try {
+        $stmt = executeQuery(
+            "SELECT id, user_id, token, expires_at FROM password_reset_tokens 
+             WHERE email = ? AND otp_code = ? AND used = 0 AND expires_at > NOW() 
+             ORDER BY created_at DESC LIMIT 1",
+            [$email, $otpCode]
+        );
+
+        $resetToken = $stmt->fetch();
+
+        if (!$resetToken) {
+            return [
+                'success' => false,
+                'message' => 'Invalid or expired OTP code. Please request a new one.'
+            ];
+        }
+        
+        $userId = $resetToken['user_id'];
+        $resetId = $resetToken['id'];
+        
+        $passwordHash = password_hash($newPassword, PASSWORD_DEFAULT, ['cost' => BCRYPT_COST]);
+        
+        $pdo = getDbConnection();
+        $pdo->beginTransaction();
+        
+        try {
+            executeQuery(
+                "UPDATE users SET password_hash = ?, updated_at = NOW() WHERE id = ?",
+                [$passwordHash, $userId]
+            );
+
+            executeQuery(
+                "UPDATE password_reset_tokens SET used = 1, used_at = NOW() WHERE id = ?",
+                [$resetId]
+            );
+            
+            executeQuery(
+                "DELETE FROM user_sessions WHERE user_id = ?",
+                [$userId]
+            );
+            
+            $pdo->commit();
+            
+            return [
+                'success' => true,
+                'message' => 'Password reset successfully.'
+            ];
+            
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
+        
+    } catch (Exception $e) {
+        error_log("Password reset error: " . $e->getMessage());
+        return [
+            'success' => false,
+            'message' => 'Unable to reset password. Please try again.'
+        ];
+    }
+}
+
+function cleanupExpiredResetTokens() {
+    try {
+        executeQuery(
+            "DELETE FROM password_reset_tokens WHERE expires_at < NOW() OR used = 1",
+            []
+        );
+        
+        return true;
+    } catch (Exception $e) {
+        error_log("Cleanup expired reset tokens error: " . $e->getMessage());
+        return false;
+    }
+}
+
+function sendPasswordResetOTP($email, $otpCode, $userId) {
+    try {
+        $mail = new PHPMailer(true);
+
+        $mail->isSMTP();
+        $mail->Host       = MAIL_HOST;
+        $mail->SMTPAuth   = true;
+        $mail->Username   = MAIL_USERNAME;
+        $mail->Password   = MAIL_PASSWORD;
+        $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+        $mail->Port       = MAIL_PORT;
+
+        $mail->setFrom(MAIL_FROM_EMAIL, MAIL_FROM_NAME);
+        $mail->addAddress($email);
+        $mail->addReplyTo(MAIL_FROM_EMAIL, MAIL_FROM_NAME);
+        
+        $mail->isHTML(true);
+        $mail->Subject = 'Password Reset OTP - CivicVoice';
+
+        $mail->Body = '
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Password Reset OTP</title>
+        </head>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+            <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
+                <h1 style="margin: 0; font-size: 28px;">🔐 Password Reset OTP</h1>
+                <p style="margin: 10px 0 0 0; opacity: 0.9;">CivicVoice Security Code</p>
+            </div>
+            
+            <div style="background: #f8f9fa; padding: 30px; border-radius: 0 0 10px 10px; border: 1px solid #e9ecef; border-top: none;">
+                <div style="text-align: center; margin-bottom: 30px;">
+                    <div style="background: white; display: inline-block; padding: 20px 40px; border-radius: 10px; border: 2px solid #007bff; margin: 20px 0;">
+                        <div style="font-size: 14px; color: #666; margin-bottom: 5px;">Your OTP Code</div>
+                        <div style="font-size: 36px; font-weight: bold; color: #007bff; letter-spacing: 5px; font-family: monospace;">' . $otpCode . '</div>
+                    </div>
+                </div>
+                
+                <p><strong>Hello,</strong></p>
+                
+                <p>You requested a password reset for your CivicVoice account. Use the OTP code above to reset your password.</p>
+                
+                <div style="background: white; padding: 20px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #dc3545;">
+                    <h3 style="margin-top: 0; color: #dc3545;">⏰ Important Security Information</h3>
+                    <ul style="margin: 0;">
+                        <li><strong>This OTP expires in 10 minutes</strong></li>
+                        <li>Use it on the password reset page</li>
+                        <li>Don\'t share this code with anyone</li>
+                        <li>If you didn\'t request this, please ignore this email</li>
+                    </ul>
+                </div>
+                
+                <div style="text-align: center; margin: 30px 0;">
+                    <a href="' . SITE_URL . '/forgot_password.php" style="background: #28a745; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold;">Go to Password Reset Page</a>
+                </div>
+                
+                <p style="color: #666; font-size: 14px; margin-top: 30px;">
+                    This email was sent from CivicVoice password reset system.
+                    <br>If you didn\'t request this password reset, please ignore this email or contact support.
+                </p>
+            </div>
+        </body>
+        </html>';
+
+        $mail->AltBody = "CivicVoice Password Reset OTP\n\nYour OTP Code: " . $otpCode . "\n\nThis code expires in 10 minutes.\nEnter this code on the password reset page to continue.\n\nIf you didn't request this password reset, please ignore this email.\n\nGo to: " . SITE_URL . "/forgot_password.php";
+
+        $mail->send();
+        
+        return [
+            'success' => true,
+            'message' => 'OTP email sent successfully.'
+        ];
+        
+    } catch (Exception $e) {
+        error_log("Password reset OTP email error: " . $e->getMessage());
+        return [
+            'success' => false,
+            'message' => 'Failed to send OTP email: ' . $e->getMessage()
+        ];
+    }
+}
+
 ?>

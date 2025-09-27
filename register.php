@@ -39,7 +39,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 [$username, $email, $password_hash, $full_name, $phone, $role]
             );
             
-            $success = 'Registration successful! Your username is: ' . $username . '. You can now login.';
+                        $success = 'Registration successful! You can now log in with your credentials.';
+            $username = $email = $full_name = '';
             
             // Clear form data
             $full_name = $email = $phone = '';
