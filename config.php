@@ -1,36 +1,35 @@
 <?php
-// Database configuration for CivicVoice (comment changed)
-
-// Start session if not already started
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// Database connection parameters
-define('DB_HOST', 'localhost');
-define('DB_USERNAME', 'root');
-define('DB_PASSWORD', '');
-define('DB_NAME', 'civicvoice');
+$env = parse_ini_file(__DIR__ . '/.env');
 
-// Application configuration
-define('SITE_URL', 'http://localhost/CivicVoice');
-define('UPLOAD_DIR', 'uploads/');
-define('MAX_FILE_SIZE', 5 * 1024 * 1024); // 5MB
-define('ALLOWED_IMAGE_TYPES', ['image/jpeg', 'image/png', 'image/gif']);
+// Database config
+define('DB_HOST', $env['DB_HOST']);
+define('DB_USERNAME', $env['DB_USERNAME']);
+define('DB_PASSWORD', $env['DB_PASSWORD']);
+define('DB_NAME', $env['DB_NAME']);
 
-// Security configuration
-define('SESSION_LIFETIME', 7200); // 2 hours
-define('PASSWORD_MIN_LENGTH', 6);
-define('BCRYPT_COST', 12);
+// App config
+define('SITE_URL', $env['SITE_URL']);
+define('UPLOAD_DIR', $env['UPLOAD_DIR']);
+define('MAX_FILE_SIZE', $env['MAX_FILE_SIZE']);
+define('ALLOWED_IMAGE_TYPES', explode(',', $env['ALLOWED_IMAGE_TYPES']));
 
-// Email configuration - Gmail SMTP
-define('MAIL_HOST', 'smtp.gmail.com');        // Gmail SMTP server
-define('MAIL_PORT', 587);                     // Gmail SMTP port (587 for TLS, 465 for SSL)
-define('MAIL_USERNAME', 'lostlink.dev@gmail.com'); // Your Gmail address
-define('MAIL_PASSWORD', 'kcrneiuyrhpzwxuk');     // Gmail App Password (NOT regular password)
-define('MAIL_FROM_EMAIL', 'lostlink.dev@gmail.com'); // Same as username
-define('MAIL_FROM_NAME', 'CivicVoice Support');
-define('MAIL_ENCRYPTION', 'tls');             // Use 'tls' for port 587, 'ssl' for port 465
+// Security
+define('SESSION_LIFETIME', $env['SESSION_LIFETIME']);
+define('PASSWORD_MIN_LENGTH', $env['PASSWORD_MIN_LENGTH']);
+define('BCRYPT_COST', $env['BCRYPT_COST']);
+
+// Mail config
+define('MAIL_HOST', $env['MAIL_HOST']);
+define('MAIL_PORT', $env['MAIL_PORT']);
+define('MAIL_USERNAME', $env['MAIL_USERNAME']);
+define('MAIL_PASSWORD', $env['MAIL_PASSWORD']);
+define('MAIL_FROM_EMAIL', $env['MAIL_FROM_EMAIL']);
+define('MAIL_FROM_NAME', $env['MAIL_FROM_NAME']);
+define('MAIL_ENCRYPTION', $env['MAIL_ENCRYPTION']);
 
 // Create database connection
 try {
