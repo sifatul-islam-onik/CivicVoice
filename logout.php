@@ -4,7 +4,7 @@ require_once 'includes/auth_functions.php';
 
 // Require login to logout
 requireLogin();
-
+//testing
 // Process logout
 logout();
 
@@ -12,3 +12,4 @@ logout();
 header("Location: login.php?logged_out=1");
 exit();
 ?>
+
