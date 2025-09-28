@@ -164,11 +164,11 @@ $fixedCount = count(array_filter($allReports, fn($r) => $r['status'] === 'fixed'
                         <a href="dashboard.php" class="nav-link">Dashboard</a>
                     </li>
                     <li class="nav-item">
-                        <a href="reports.php" class="nav-link active">All Reports</a>
+                        <a href="report.php" class="nav-link ">Report Issue</a>
                     </li>
                     <?php if (hasAnyRole(['citizen', 'authority'])): ?>
                     <li class="nav-item">
-                        <a href="report.php" class="nav-link">Report Issue</a>
+                        <a href="reports.php" class="nav-link active">All reports</a>
                     </li>
                     <?php endif; ?>
                     <?php if (hasRole('admin')): ?>

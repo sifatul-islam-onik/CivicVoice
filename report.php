@@ -63,10 +63,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <a href="dashboard.php" class="nav-link">Dashboard</a>
                     </li>
                     <li class="nav-item">
-                        <a href="reports.php" class="nav-link">All Reports</a>
+                        <a href="report.php" class="nav-link active">Report Issue</a>
                     </li>
                     <li class="nav-item">
-                        <a href="report.php" class="nav-link active">Report Issue</a>
+                        <a href="reports.php" class="nav-link">All reports</a>
                     </li>
                 </ul>
                 <div class="nav-user">
