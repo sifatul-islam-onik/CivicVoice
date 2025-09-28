@@ -448,11 +448,6 @@ function sendPasswordResetOTP($email, $otpCode, $userId) {
                         <li>If you didn\'t request this, please ignore this email</li>
                     </ul>
                 </div>
-                
-                <div style="text-align: center; margin: 30px 0;">
-                    <a href="' . SITE_URL . '/forgot_password.php" style="background: #28a745; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; font-weight: bold;">Go to Password Reset Page</a>
-                </div>
-                
                 <p style="color: #666; font-size: 14px; margin-top: 30px;">
                     This email was sent from CivicVoice password reset system.
                     <br>If you didn\'t request this password reset, please ignore this email or contact support.

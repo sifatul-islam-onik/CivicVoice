@@ -275,7 +275,7 @@ $page_title = "Forgot Password - CivicVoice";
                 
                 <button type="submit" name="step" value="email" class="btn btn-secondary" style="margin-top: 10px;">
                     <i class="fas fa-arrow-left"></i>
-                    Back to Email
+                    Resend Code
                 </button>
             </form>
             
@@ -285,7 +285,7 @@ $page_title = "Forgot Password - CivicVoice";
                 <input type="hidden" name="step" value="password">
                 <input type="hidden" name="email" value="<?php echo htmlspecialchars($email); ?>">
                 <input type="hidden" name="otp_token" value="<?php echo htmlspecialchars($otpToken); ?>">
-                <input type="hidden" name="validated_otp" value="<?php echo htmlspecialchars($validatedOTP ?? ''); ?>">>
+                <input type="hidden" name="validated_otp" value="<?php echo htmlspecialchars($validatedOTP ?? ''); ?>">
                 
                 <div class="form-group">
                     <label for="password">New Password</label>
@@ -319,7 +319,7 @@ $page_title = "Forgot Password - CivicVoice";
                     </div>
                 </div>
                 
-                <div class="password-requirements">
+                <div class="forget-password-requirements password-requirements">
                     <small>Password must be at least <?php echo PASSWORD_MIN_LENGTH; ?> characters long</small>
                 </div>
                 
