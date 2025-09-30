@@ -8,68 +8,36 @@ requireLogin();
 $user = getCurrentUser();
 $page_title = "Dashboard - CivicVoice";
 
-// Dummy data for demonstration
-$dummyStats = [
-    'citizen' => [
-        'my_reports' => 5,
-        'pending' => 2,
-        'in_progress' => 2,
-        'fixed' => 1
-    ],
-    'authority' => [
-        'total_reports' => 23,
-        'pending' => 8,
-        'in_progress' => 10,
-        'resolved_today' => 3
-    ],
-    'admin' => [
-        'total_users' => 156,
-        'total_reports' => 89,
-        'active_issues' => 18,
-        'system_health' => 'Good'
-    ]
-];
+// Fetch stats from the database
+if (hasRole('citizen')) {
+    // Citizen stats
+    $myReports = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ?", [$user['id']])->fetchColumn();
+    $pending = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ? AND status = 'pending'", [$user['id']])->fetchColumn();
+    $inProgress = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ? AND status = 'in-progress'", [$user['id']])->fetchColumn();
+    $fixed = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ? AND status = 'fixed'", [$user['id']])->fetchColumn();
+} elseif (hasRole('authority')) {
+    // Authority stats
+    $totalReports = executeQuery("SELECT COUNT(*) FROM reports")->fetchColumn();
+    $pending = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'pending'")->fetchColumn();
+    $inProgress = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'in-progress'")->fetchColumn();
+    $resolvedToday = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed' AND DATE(updated_at) = CURDATE()")->fetchColumn();
+} elseif (hasRole('admin')) {
+    // Admin stats
+    $totalUsers = executeQuery("SELECT COUNT(*) FROM users")->fetchColumn();
+    $totalReports = executeQuery("SELECT COUNT(*) FROM reports")->fetchColumn();
+    $activeIssues = executeQuery("SELECT COUNT(*) FROM reports WHERE status IN ('pending', 'in-progress')")->fetchColumn();
+    $systemHealth = 'Good';
+}
 
-$recentReports = [
-    [
-        'id' => 1,
-        'title' => 'Broken Streetlight on Main Street',
-        'category' => 'streetlight',
-        'status' => 'pending',
-        'location' => 'Main Street, Block A',
-        'created_at' => '2025-09-13 10:30:00',
-        'reporter' => 'John Doe'
-    ],
-    [
-        'id' => 2,
-        'title' => 'Large Pothole Near School',
-        'category' => 'pothole',
-        'status' => 'in-progress',
-        'location' => 'School Road, Near Elementary',
-        'created_at' => '2025-09-12 14:15:00',
-        'reporter' => 'Sarah Ahmed'
-    ],
-    [
-        'id' => 3,
-        'title' => 'Garbage Collection Missed',
-        'category' => 'garbage',
-        'status' => 'fixed',
-        'location' => 'Residential Area B',
-        'created_at' => '2025-09-11 08:45:00',
-        'reporter' => 'Mike Johnson'
-    ],
-    [
-        'id' => 4,
-        'title' => 'Traffic Signal Not Working',
-        'category' => 'traffic',
-        'status' => 'pending',
-        'location' => 'Central Square Intersection',
-        'created_at' => '2025-09-13 16:20:00',
-        'reporter' => 'Lisa Rahman'
-    ]
-];
-
-$currentStats = $dummyStats[$user['role']] ?? $dummyStats['citizen'];
+// Fetch latest 4 reports from the database
+$stmt = executeQuery(
+    "SELECT r.*, u.full_name AS reporter
+     FROM reports r
+     JOIN users u ON r.user_id = u.id
+     ORDER BY r.created_at DESC
+     LIMIT 4"
+);
+$recentReports = $stmt->fetchAll();
 ?>
 
 <!DOCTYPE html>
@@ -132,19 +100,19 @@ $currentStats = $dummyStats[$user['role']] ?? $dummyStats['citizen'];
                 <div class="dashboard-stats">
                     <div class="stat-card">
                         <h3>My Reports</h3>
-                        <span class="stat-number"><?php echo $currentStats['my_reports']; ?></span>
+                        <span class="stat-number"><?php echo $myReports; ?></span>
                     </div>
                     <div class="stat-card">
                         <h3>Pending</h3>
-                        <span class="stat-number"><?php echo $currentStats['pending']; ?></span>
+                        <span class="stat-number"><?php echo $pending; ?></span>
                     </div>
                     <div class="stat-card">
                         <h3>In Progress</h3>
-                        <span class="stat-number"><?php echo $currentStats['in_progress']; ?></span>
+                        <span class="stat-number"><?php echo $inProgress; ?></span>
                     </div>
                     <div class="stat-card">
                         <h3>Fixed</h3>
-                        <span class="stat-number"><?php echo $currentStats['fixed']; ?></span>
+                        <span class="stat-number"><?php echo $fixed; ?></span>
                     </div>
                 </div>
 
@@ -159,19 +127,19 @@ $currentStats = $dummyStats[$user['role']] ?? $dummyStats['citizen'];
                 <div class="dashboard-stats">
                     <div class="stat-card">
                         <h3>Total Reports</h3>
-                        <span class="stat-number"><?php echo $currentStats['total_reports']; ?></span>
+                        <span class="stat-number"><?php echo $totalReports; ?></span>
                     </div>
                     <div class="stat-card">
                         <h3>Pending Review</h3>
-                        <span class="stat-number pending"><?php echo $currentStats['pending']; ?></span>
+                        <span class="stat-number pending"><?php echo $pending; ?></span>
                     </div>
                     <div class="stat-card">
                         <h3>In Progress</h3>
-                        <span class="stat-number in-progress"><?php echo $currentStats['in_progress']; ?></span>
+                        <span class="stat-number in-progress"><?php echo $inProgress; ?></span>
                     </div>
                     <div class="stat-card">
                         <h3>Resolved Today</h3>
-                        <span class="stat-number fixed"><?php echo $currentStats['resolved_today']; ?></span>
+                        <span class="stat-number fixed"><?php echo $resolvedToday; ?></span>
                     </div>
                 </div>
 
@@ -186,15 +154,15 @@ $currentStats = $dummyStats[$user['role']] ?? $dummyStats['citizen'];
                 <div class="dashboard-stats">
                     <div class="stat-card">
                         <h3>Total Users</h3>
-                        <span class="stat-number"><?php echo $currentStats['total_users']; ?></span>
+                        <span class="stat-number"><?php echo $totalUsers; ?></span>
                     </div>
                     <div class="stat-card">
                         <h3>Total Reports</h3>
-                        <span class="stat-number"><?php echo $currentStats['total_reports']; ?></span>
+                        <span class="stat-number"><?php echo $totalReports; ?></span>
                     </div>
                     <div class="stat-card">
                         <h3>Active Issues</h3>
-                        <span class="stat-number pending"><?php echo $currentStats['active_issues']; ?></span>
+                        <span class="stat-number pending"><?php echo $activeIssues; ?></span>
                     </div>
                     <div class="stat-card">
                         <h3>System Health</h3>
@@ -271,12 +239,12 @@ $currentStats = $dummyStats[$user['role']] ?? $dummyStats['citizen'];
                     <div class="action-card" onclick="filterReports('pending')">
                         <div class="action-icon">⚠️</div>
                         <h3>Review Pending</h3>
-                        <p><?php echo $currentStats['pending'] ?? 8; ?> reports waiting</p>
+                        <p><?php echo $pending ?? 8; ?> reports waiting</p>
                     </div>
                     <div class="action-card" onclick="filterReports('in-progress')">
                         <div class="action-icon">🔄</div>
                         <h3>Track Progress</h3>
-                        <p><?php echo $currentStats['in_progress'] ?? 10; ?> in progress</p>
+                        <p><?php echo $inProgress ?? 10; ?> in progress</p>
                     </div>
                     <div class="action-card" onclick="showMap()">
                         <div class="action-icon">🗺️</div>

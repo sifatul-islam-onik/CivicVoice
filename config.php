@@ -62,8 +62,8 @@ function executeQuery($query, $params = []) {
         $stmt->execute($params);
         return $stmt;
     } catch (PDOException $e) {
-        error_log("Query execution failed: " . $e->getMessage());
-        throw new Exception("Database operation failed");
+        // Show the real error for debugging
+        throw new Exception($e->getMessage());
     }
 }
 
