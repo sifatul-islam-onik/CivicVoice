@@ -17,8 +17,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $description = trim($_POST['description'] ?? '');
     $category = $_POST['category'] ?? '';
     $location = trim($_POST['location'] ?? '');
-    $latitude = $_POST['latitude'] ?? null;
-    $longitude = $_POST['longitude'] ?? null;
+    $latitude = trim($_POST['latitude'] ?? '');
+    $longitude = trim($_POST['longitude'] ?? '');
+
+    // Convert empty latitude/longitude to null for database
+    $latitude = ($latitude === '') ? null : $latitude;
+    $longitude = ($longitude === '') ? null : $longitude;
+
     $priority = $_POST['priority'] ?? 'medium';
     
     // Validation
@@ -29,14 +34,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } elseif (!in_array($priority, ['low', 'medium', 'high'])) {
         $error = 'Invalid priority level.';
     } else {
-        // Simulate successful submission
-        $reportId = rand(100, 999);
-        $success = "Your report has been submitted successfully! Report ID: #$reportId. You will be notified when authorities review your report.";
-        
-        // Clear form data
-        $title = $description = $location = '';
-        $category = $priority = '';
-        $latitude = $longitude = null;
+        // Handle photo upload if provided (photo is optional)
+        $photo_path = null;
+        if (
+            isset($_FILES['photo']) &&
+            $_FILES['photo']['error'] !== UPLOAD_ERR_NO_FILE &&
+            $_FILES['photo']['error'] === UPLOAD_ERR_OK
+        ) {
+            $allowed_types = ['image/jpeg', 'image/png', 'image/gif'];
+            if (in_array($_FILES['photo']['type'], $allowed_types)) {
+                $ext = pathinfo($_FILES['photo']['name'], PATHINFO_EXTENSION);
+                $filename = 'report_' . time() . '_' . rand(1000,9999) . '.' . $ext;
+                $target = UPLOAD_DIR . $filename;
+                if (move_uploaded_file($_FILES['photo']['tmp_name'], $target)) {
+                    $photo_path = $filename;
+                }
+            }
+        }
+
+        try {
+            executeQuery(
+                "INSERT INTO reports (user_id, title, description, category, location, latitude, longitude, status, photo_path, priority, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW())",
+                [
+                    $user['id'],
+                    $title,
+                    $description,
+                    $category,
+                    $location,
+                    $latitude,
+                    $longitude,
+                    $photo_path,
+                    $priority
+                ]
+            );
+            $success = "Your report has been submitted successfully! You will be notified when authorities review your report.";
+
+            // Clear form data
+            $title = $description = $location = '';
+            $category = $priority = '';
+            $latitude = $longitude = null;
+        } catch (Exception $e) {
+            $error = 'Failed to submit report: ' . $e->getMessage();
+        }
     }
 }
 ?>
@@ -63,10 +103,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <a href="dashboard.php" class="nav-link">Dashboard</a>
                     </li>
                     <li class="nav-item">
-                        <a href="reports.php" class="nav-link">All Reports</a>
+                        <a href="report.php" class="nav-link active">Report Issue</a>
                     </li>
                     <li class="nav-item">
-                        <a href="report.php" class="nav-link active">Report Issue</a>
+                        <a href="reports.php" class="nav-link">All reports</a>
                     </li>
                 </ul>
                 <div class="nav-user">

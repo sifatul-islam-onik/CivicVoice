@@ -13,135 +13,36 @@ $statusFilter = $_GET['status'] ?? '';
 $categoryFilter = $_GET['category'] ?? '';
 $userFilter = $_GET['user'] ?? '';
 
-// Dummy reports data
-$allReports = [
-    [
-        'id' => 1,
-        'title' => 'Broken Streetlight on Main Street',
-        'description' => 'The streetlight has been flickering for several days and went completely dark last night. This creates a safety hazard for pedestrians.',
-        'category' => 'streetlight',
-        'status' => 'pending',
-        'location' => 'Main Street, Block A',
-        'latitude' => 23.8103,
-        'longitude' => 90.4125,
-        'created_at' => '2025-09-13 10:30:00',
-        'updated_at' => '2025-09-13 10:30:00',
-        'reporter' => 'John Doe',
-        'reporter_email' => 'john@example.com',
-        'priority' => 'high',
-        'photo' => 'streetlight1.jpg'
-    ],
-    [
-        'id' => 2,
-        'title' => 'Large Pothole Near School',
-        'description' => 'There is a large pothole that poses danger to vehicles and school children. It has gotten worse after recent rain.',
-        'category' => 'pothole',
-        'status' => 'in-progress',
-        'location' => 'School Road, Near Elementary',
-        'latitude' => 23.8043,
-        'longitude' => 90.4177,
-        'created_at' => '2025-09-12 14:15:00',
-        'updated_at' => '2025-09-13 09:20:00',
-        'reporter' => 'Sarah Ahmed',
-        'reporter_email' => 'sarah@example.com',
-        'priority' => 'high',
-        'photo' => 'pothole1.jpg'
-    ],
-    [
-        'id' => 3,
-        'title' => 'Garbage Collection Missed',
-        'description' => 'Garbage collection was missed for the third time this month in our residential area. The bins are overflowing.',
-        'category' => 'garbage',
-        'status' => 'fixed',
-        'location' => 'Residential Area B',
-        'latitude' => 23.8203,
-        'longitude' => 90.4225,
-        'created_at' => '2025-09-11 08:45:00',
-        'updated_at' => '2025-09-12 16:30:00',
-        'reporter' => 'Mike Johnson',
-        'reporter_email' => 'mike@example.com',
-        'priority' => 'medium',
-        'photo' => 'garbage1.jpg'
-    ],
-    [
-        'id' => 4,
-        'title' => 'Traffic Signal Not Working',
-        'description' => 'The traffic signal at Central Square has been malfunctioning, causing traffic congestion and safety concerns.',
-        'category' => 'traffic',
-        'status' => 'pending',
-        'location' => 'Central Square Intersection',
-        'latitude' => 23.8123,
-        'longitude' => 90.4155,
-        'created_at' => '2025-09-13 16:20:00',
-        'updated_at' => '2025-09-13 16:20:00',
-        'reporter' => 'Lisa Rahman',
-        'reporter_email' => 'lisa@example.com',
-        'priority' => 'high',
-        'photo' => 'traffic1.jpg'
-    ],
-    [
-        'id' => 5,
-        'title' => 'Damaged Park Bench',
-        'description' => 'The bench in City Park is broken and has sharp edges that could hurt children playing nearby.',
-        'category' => 'other',
-        'status' => 'pending',
-        'location' => 'City Park, Section C',
-        'latitude' => 23.8183,
-        'longitude' => 90.4195,
-        'created_at' => '2025-09-10 11:00:00',
-        'updated_at' => '2025-09-10 11:00:00',
-        'reporter' => 'Ahmed Hassan',
-        'reporter_email' => 'ahmed@example.com',
-        'priority' => 'low',
-        'photo' => null
-    ],
-    [
-        'id' => 6,
-        'title' => 'Water Leakage on Street',
-        'description' => 'There is a continuous water leak creating a puddle on the street. It seems to be from the main water line.',
-        'category' => 'other',
-        'status' => 'in-progress',
-        'location' => 'Commerce Street, Block 5',
-        'latitude' => 23.8083,
-        'longitude' => 90.4135,
-        'created_at' => '2025-09-09 07:30:00',
-        'updated_at' => '2025-09-11 14:45:00',
-        'reporter' => 'Fatima Khan',
-        'reporter_email' => 'fatima@example.com',
-        'priority' => 'medium',
-        'photo' => 'water_leak1.jpg'
-    ]
-];
-
-// Filter reports based on parameters
-$reports = $allReports;
+// Build SQL query with filters
+$sql = "SELECT r.*, u.full_name AS reporter, u.email AS reporter_email
+        FROM reports r
+        JOIN users u ON r.user_id = u.id
+        WHERE 1";
+$params = [];
 
 if ($statusFilter) {
-    $reports = array_filter($reports, function($report) use ($statusFilter) {
-        return $report['status'] === $statusFilter;
-    });
+    $sql .= " AND r.status = ?";
+    $params[] = $statusFilter;
 }
-
 if ($categoryFilter) {
-    $reports = array_filter($reports, function($report) use ($categoryFilter) {
-        return $report['category'] === $categoryFilter;
-    });
+    $sql .= " AND r.category = ?";
+    $params[] = $categoryFilter;
 }
-
-// If viewing only user's reports
 if ($userFilter === 'me') {
-    $reports = array_filter($reports, function($report) use ($user) {
-        return $report['reporter_email'] === $user['email'];
-    });
+    $sql .= " AND u.id = ?";
+    $params[] = $user['id'];
 }
+$sql .= " ORDER BY r.created_at DESC";
+
+$stmt = executeQuery($sql, $params);
+$reports = $stmt->fetchAll();
 
 // Calculate statistics
-$totalReports = count($allReports);
-$pendingCount = count(array_filter($allReports, fn($r) => $r['status'] === 'pending'));
-$inProgressCount = count(array_filter($allReports, fn($r) => $r['status'] === 'in-progress'));
-$fixedCount = count(array_filter($allReports, fn($r) => $r['status'] === 'fixed'));
+$totalReports = executeQuery("SELECT COUNT(*) FROM reports")->fetchColumn();
+$pendingCount = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'pending'")->fetchColumn();
+$inProgressCount = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'in-progress'")->fetchColumn();
+$fixedCount = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed'")->fetchColumn();
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -164,11 +65,11 @@ $fixedCount = count(array_filter($allReports, fn($r) => $r['status'] === 'fixed'
                         <a href="dashboard.php" class="nav-link">Dashboard</a>
                     </li>
                     <li class="nav-item">
-                        <a href="reports.php" class="nav-link active">All Reports</a>
+                        <a href="report.php" class="nav-link ">Report Issue</a>
                     </li>
                     <?php if (hasAnyRole(['citizen', 'authority'])): ?>
                     <li class="nav-item">
-                        <a href="report.php" class="nav-link">Report Issue</a>
+                        <a href="reports.php" class="nav-link active">All reports</a>
                     </li>
                     <?php endif; ?>
                     <?php if (hasRole('admin')): ?>
@@ -321,7 +222,7 @@ $fixedCount = count(array_filter($allReports, fn($r) => $r['status'] === 'fixed'
                                             <span><?php echo date('M j, Y g:i A', strtotime($report['created_at'])); ?></span>
                                         </div>
                                         
-                                        <?php if ($report['updated_at'] !== $report['created_at']): ?>
+                                        <?php if (!empty($report['updated_at']) && $report['updated_at'] !== $report['created_at']): ?>
                                         <div class="detail-item">
                                             <span class="detail-icon">🔄</span>
                                             <span>Updated <?php echo date('M j, Y g:i A', strtotime($report['updated_at'])); ?></span>
@@ -330,16 +231,16 @@ $fixedCount = count(array_filter($allReports, fn($r) => $r['status'] === 'fixed'
                                     </div>
                                 </div>
                                 
-                                <?php if ($report['photo']): ?>
+                                <?php if (!empty($report['photo_path'])): ?>
                                 <div class="report-image">
-                                    <img src="uploads/reports/<?php echo htmlspecialchars($report['photo']); ?>" 
+                                    <img src="uploads/<?php echo htmlspecialchars($report['photo_path']); ?>" 
                                          alt="Report image" onclick="openImageModal(this.src)">
                                 </div>
                                 <?php endif; ?>
                             </div>
                             
                             <div class="report-actions">
-                                <button class="btn btn-small btn-secondary" onclick="viewOnMap(<?php echo $report['latitude']; ?>, <?php echo $report['longitude']; ?>)">
+                                <button class="btn btn-small btn-secondary" onclick="viewOnMap(<?php echo $report['latitude'] ?: 'null'; ?>, <?php echo $report['longitude'] ?: 'null'; ?>)">
                                     🗺️ View on Map
                                 </button>
                                 
