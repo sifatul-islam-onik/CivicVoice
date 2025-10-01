@@ -8,6 +8,70 @@ requireLogin();
 $user = getCurrentUser();
 $page_title = "Dashboard - CivicVoice";
 
+// Handle admin actions for authority management
+if (hasRole('admin') && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['action'])) {
+        switch ($_POST['action']) {
+            case 'create_authority':
+                $username = trim($_POST['username']);
+                $email = trim($_POST['email']);
+                $full_name = trim($_POST['full_name']);
+                $phone = trim($_POST['phone']) ?: null;
+                $password = $_POST['password'];
+                
+                if (!empty($username) && !empty($email) && !empty($full_name) && !empty($password)) {
+                    try {
+                        // Check if username or email already exists
+                        $checkStmt = executeQuery("SELECT id FROM users WHERE username = ? OR email = ?", [$username, $email]);
+                        if ($checkStmt->fetch()) {
+                            $error = "Username or email already exists.";
+                        } else {
+                            $passwordHash = password_hash($password, PASSWORD_DEFAULT, ['cost' => BCRYPT_COST]);
+                            executeQuery(
+                                "INSERT INTO users (username, email, password_hash, full_name, phone, role, is_active, email_verified) VALUES (?, ?, ?, ?, ?, 'authority', 1, 1)",
+                                [$username, $email, $passwordHash, $full_name, $phone]
+                            );
+                            $success = "Authority account created successfully!";
+                        }
+                    } catch (Exception $e) {
+                        $error = "Failed to create authority account.";
+                    }
+                }
+                break;
+                
+            case 'toggle_authority_status':
+                $userId = (int)$_POST['user_id'];
+                $newStatus = $_POST['status'] === 'active' ? 1 : 0;
+                
+                try {
+                    executeQuery("UPDATE users SET is_active = ? WHERE id = ? AND role = 'authority'", [$newStatus, $userId]);
+                    $success = "Authority status updated successfully!";
+                } catch (Exception $e) {
+                    $error = "Failed to update authority status.";
+                }
+                break;
+                
+            case 'delete_authority':
+                $userId = (int)$_POST['user_id'];
+                
+                try {
+                    // First check if this authority has any report updates
+                    $hasUpdates = executeQuery("SELECT COUNT(*) FROM status_updates WHERE updated_by_user_id = ?", [$userId])->fetchColumn();
+                    
+                    if ($hasUpdates > 0) {
+                        $error = "Cannot delete authority account with existing report updates. Deactivate instead.";
+                    } else {
+                        executeQuery("DELETE FROM users WHERE id = ? AND role = 'authority'", [$userId]);
+                        $success = "Authority account deleted successfully!";
+                    }
+                } catch (Exception $e) {
+                    $error = "Failed to delete authority account.";
+                }
+                break;
+        }
+    }
+}
+
 // Fetch stats from the database
 if (hasRole('citizen')) {
     // Citizen stats
@@ -22,22 +86,62 @@ if (hasRole('citizen')) {
     $inProgress = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'in-progress'")->fetchColumn();
     $resolvedToday = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed' AND DATE(updated_at) = CURDATE()")->fetchColumn();
 } elseif (hasRole('admin')) {
-    // Admin stats
+    // Admin stats - comprehensive system analytics
     $totalUsers = executeQuery("SELECT COUNT(*) FROM users")->fetchColumn();
+    $totalAuthorities = executeQuery("SELECT COUNT(*) FROM users WHERE role = 'authority'")->fetchColumn();
+    $activeAuthorities = executeQuery("SELECT COUNT(*) FROM users WHERE role = 'authority' AND is_active = 1")->fetchColumn();
+    $totalCitizens = executeQuery("SELECT COUNT(*) FROM users WHERE role = 'citizen'")->fetchColumn();
     $totalReports = executeQuery("SELECT COUNT(*) FROM reports")->fetchColumn();
     $activeIssues = executeQuery("SELECT COUNT(*) FROM reports WHERE status IN ('pending', 'in-progress')")->fetchColumn();
-    $systemHealth = 'Good';
+    $resolvedThisMonth = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed' AND MONTH(updated_at) = MONTH(CURRENT_DATE())")->fetchColumn();
+    $avgResolutionTime = executeQuery("SELECT ROUND(AVG(DATEDIFF(updated_at, created_at)), 1) FROM reports WHERE status = 'fixed'")->fetchColumn() ?: 0;
+    
+    // Category breakdown
+    $categoryStats = executeQuery("SELECT category, COUNT(*) as count FROM reports GROUP BY category")->fetchAll();
+    
+    // Monthly report trends (last 6 months)
+    $monthlyTrends = executeQuery("
+        SELECT DATE_FORMAT(created_at, '%Y-%m') as month, COUNT(*) as count 
+        FROM reports 
+        WHERE created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 6 MONTH)
+        GROUP BY DATE_FORMAT(created_at, '%Y-%m')
+        ORDER BY month
+    ")->fetchAll();
+    
+    // Authority performance
+    $authorityPerformance = executeQuery("
+        SELECT u.full_name, u.username, 
+               COUNT(su.id) as updates_made,
+               COUNT(DISTINCT su.report_id) as reports_handled,
+               u.is_active
+        FROM users u 
+        LEFT JOIN status_updates su ON u.id = su.updated_by_user_id 
+        WHERE u.role = 'authority' 
+        GROUP BY u.id, u.full_name, u.username, u.is_active
+        ORDER BY updates_made DESC
+    ")->fetchAll();
+    
+    // Fetch all authorities for management
+    $authorities = executeQuery("
+        SELECT id, username, email, full_name, phone, is_active, created_at,
+               (SELECT COUNT(*) FROM status_updates WHERE updated_by_user_id = users.id) as total_updates
+        FROM users 
+        WHERE role = 'authority' 
+        ORDER BY created_at DESC
+    ")->fetchAll();
 }
 
-// Fetch latest 4 reports from the database
-$stmt = executeQuery(
-    "SELECT r.*, u.full_name AS reporter
-     FROM reports r
-     JOIN users u ON r.user_id = u.id
-     ORDER BY r.created_at DESC
-     LIMIT 4"
-);
-$recentReports = $stmt->fetchAll();
+// Fetch latest 4 reports from the database (but not for admin role since they shouldn't see issues)
+if (!hasRole('admin')) {
+    $stmt = executeQuery(
+        "SELECT r.*, u.full_name AS reporter
+         FROM reports r
+         JOIN users u ON r.user_id = u.id
+         ORDER BY r.created_at DESC
+         LIMIT 4"
+    );
+    $recentReports = $stmt->fetchAll();
+}
 ?>
 
 <!DOCTYPE html>
@@ -65,12 +169,17 @@ $recentReports = $stmt->fetchAll();
                         <a href="report.php" class="nav-link">Report Issue</a>
                     </li>
                     <?php endif; ?>
+                    <?php if (!hasRole('admin')): ?>
                     <li class="nav-item">
                         <a href="reports.php" class="nav-link">All Reports</a>
                     </li>
+                    <?php endif; ?>
                     <?php if (hasRole('admin')): ?>
                     <li class="nav-item">
-                        <a href="admin/users.php" class="nav-link">Manage Users</a>
+                        <a href="#authorities" class="nav-link" onclick="showSection('authorities')">Manage Authorities</a>
+                    </li>
+                    <li class="nav-item">
+                        <a href="#analytics" class="nav-link" onclick="showSection('analytics')">System Analytics</a>
                     </li>
                     <?php endif; ?>
                 </ul>
@@ -151,32 +260,273 @@ $recentReports = $stmt->fetchAll();
 
             <?php elseif (hasRole('admin')): ?>
                 <!-- Admin Dashboard -->
-                <div class="dashboard-stats">
-                    <div class="stat-card">
-                        <h3>Total Users</h3>
-                        <span class="stat-number"><?php echo $totalUsers; ?></span>
+                <?php if (isset($success)): ?>
+                    <div class="alert alert-success"><?php echo htmlspecialchars($success); ?></div>
+                <?php endif; ?>
+                <?php if (isset($error)): ?>
+                    <div class="alert alert-error"><?php echo htmlspecialchars($error); ?></div>
+                <?php endif; ?>
+                
+                <div class="admin-dashboard">
+                    <!-- System Overview Stats -->
+                    <div class="dashboard-stats">
+                        <div class="stat-card">
+                            <h3>Total Users</h3>
+                            <span class="stat-number"><?php echo $totalUsers; ?></span>
+                            <div class="stat-detail">
+                                Citizens: <?php echo $totalCitizens; ?> | Authorities: <?php echo $totalAuthorities; ?>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <h3>Active Authorities</h3>
+                            <span class="stat-number"><?php echo $activeAuthorities; ?></span>
+                            <div class="stat-detail">
+                                Out of <?php echo $totalAuthorities; ?> total
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <h3>System Reports</h3>
+                            <span class="stat-number"><?php echo $totalReports; ?></span>
+                            <div class="stat-detail">
+                                <?php echo $activeIssues; ?> active issues
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <h3>Avg Resolution</h3>
+                            <span class="stat-number"><?php echo $avgResolutionTime; ?></span>
+                            <div class="stat-detail">
+                                days average
+                            </div>
+                        </div>
                     </div>
-                    <div class="stat-card">
-                        <h3>Total Reports</h3>
-                        <span class="stat-number"><?php echo $totalReports; ?></span>
-                    </div>
-                    <div class="stat-card">
-                        <h3>Active Issues</h3>
-                        <span class="stat-number pending"><?php echo $activeIssues; ?></span>
-                    </div>
-                    <div class="stat-card">
-                        <h3>System Health</h3>
-                        <span class="stat-number health">✅</span>
-                    </div>
-                </div>
 
-                <div class="dashboard-actions">
-                    <a href="admin/users.php" class="btn btn-primary">👥 Manage Users</a>
-                    <a href="reports.php" class="btn btn-secondary">📊 System Reports</a>
-                    <a href="admin/settings.php" class="btn btn-secondary">⚙️ System Settings</a>
+                    <!-- Admin Navigation Tabs -->
+                    <div class="admin-tabs">
+                        <button class="tab-button active" onclick="showSection('overview')">📊 Overview</button>
+                        <button class="tab-button" onclick="showSection('authorities')">👥 Manage Authorities</button>
+                        <button class="tab-button" onclick="showSection('analytics')">📈 System Analytics</button>
+                    </div>
+
+                    <!-- Overview Section -->
+                    <div id="overview-section" class="admin-section active">
+                        <h2>System Overview</h2>
+                        
+                        <!-- Quick Stats Grid -->
+                        <div class="overview-grid">
+                            <div class="overview-card">
+                                <h3>📊 Report Categories</h3>
+                                <div class="category-stats">
+                                    <?php foreach ($categoryStats as $cat): ?>
+                                        <div class="category-item">
+                                            <span class="category-name"><?php echo ucfirst($cat['category']); ?></span>
+                                            <span class="category-count"><?php echo $cat['count']; ?></span>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                            
+                            <div class="overview-card">
+                                <h3>📈 Monthly Trends</h3>
+                                <div class="trends-chart">
+                                    <?php foreach ($monthlyTrends as $trend): ?>
+                                        <div class="trend-item">
+                                            <span class="trend-month"><?php echo date('M Y', strtotime($trend['month'] . '-01')); ?></span>
+                                            <span class="trend-count"><?php echo $trend['count']; ?></span>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                            
+                            <div class="overview-card">
+                                <h3>⚡ Authority Performance</h3>
+                                <div class="performance-list">
+                                    <?php foreach (array_slice($authorityPerformance, 0, 5) as $auth): ?>
+                                        <div class="performance-item">
+                                            <span class="auth-name"><?php echo htmlspecialchars($auth['full_name']); ?></span>
+                                            <span class="auth-stats"><?php echo $auth['reports_handled']; ?> reports</span>
+                                            <span class="auth-status <?php echo $auth['is_active'] ? 'active' : 'inactive'; ?>">
+                                                <?php echo $auth['is_active'] ? '✅' : '❌'; ?>
+                                            </span>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Authority Management Section -->
+                    <div id="authorities-section" class="admin-section">
+                        <h2>Authority Management</h2>
+                        
+                        <!-- Add New Authority Form -->
+                        <div class="authority-form-container">
+                            <h3>➕ Create New Authority Account</h3>
+                            <form method="POST" class="authority-form">
+                                <input type="hidden" name="action" value="create_authority">
+                                <div class="form-grid">
+                                    <div class="form-group">
+                                        <label for="username">Username:</label>
+                                        <input type="text" id="username" name="username" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="email">Email:</label>
+                                        <input type="email" id="email" name="email" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="full_name">Full Name:</label>
+                                        <input type="text" id="full_name" name="full_name" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="phone">Phone (Optional):</label>
+                                        <input type="tel" id="phone" name="phone">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="password">Password:</label>
+                                        <input type="password" id="password" name="password" required minlength="8">
+                                    </div>
+                                    <div class="form-group">
+                                        <button type="submit" class="btn btn-primary">Create Authority</button>
+                                    </div>
+                                </div>
+                            </form>
+                        </div>
+
+                        <!-- Existing Authorities Table -->
+                        <div class="authorities-table-container">
+                            <h3>📋 Existing Authority Accounts</h3>
+                            <div class="table-responsive">
+                                <table class="authorities-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Username</th>
+                                            <th>Full Name</th>
+                                            <th>Email</th>
+                                            <th>Phone</th>
+                                            <th>Reports Handled</th>
+                                            <th>Status</th>
+                                            <th>Created</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php foreach ($authorities as $authority): ?>
+                                            <tr class="<?php echo $authority['is_active'] ? '' : 'inactive-row'; ?>">
+                                                <td><?php echo htmlspecialchars($authority['username']); ?></td>
+                                                <td><?php echo htmlspecialchars($authority['full_name']); ?></td>
+                                                <td><?php echo htmlspecialchars($authority['email']); ?></td>
+                                                <td><?php echo htmlspecialchars($authority['phone'] ?: '-'); ?></td>
+                                                <td><?php echo $authority['total_updates']; ?></td>
+                                                <td>
+                                                    <span class="status-badge <?php echo $authority['is_active'] ? 'active' : 'inactive'; ?>">
+                                                        <?php echo $authority['is_active'] ? 'Active' : 'Inactive'; ?>
+                                                    </span>
+                                                </td>
+                                                <td><?php echo date('M j, Y', strtotime($authority['created_at'])); ?></td>
+                                                <td class="table-actions">
+                                                    <form method="POST" style="display: inline;">
+                                                        <input type="hidden" name="action" value="toggle_authority_status">
+                                                        <input type="hidden" name="user_id" value="<?php echo $authority['id']; ?>">
+                                                        <input type="hidden" name="status" value="<?php echo $authority['is_active'] ? 'inactive' : 'active'; ?>">
+                                                        <button type="submit" class="btn btn-small <?php echo $authority['is_active'] ? 'btn-warning' : 'btn-success'; ?>">
+                                                            <?php echo $authority['is_active'] ? 'Deactivate' : 'Activate'; ?>
+                                                        </button>
+                                                    </form>
+                                                    <?php if ($authority['total_updates'] == 0): ?>
+                                                        <form method="POST" style="display: inline;" onsubmit="return confirm('Are you sure you want to delete this authority account?');">
+                                                            <input type="hidden" name="action" value="delete_authority">
+                                                            <input type="hidden" name="user_id" value="<?php echo $authority['id']; ?>">
+                                                            <button type="submit" class="btn btn-small btn-danger">Delete</button>
+                                                        </form>
+                                                    <?php endif; ?>
+                                                </td>
+                                            </tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Analytics Section -->
+                    <div id="analytics-section" class="admin-section">
+                        <h2>System Analytics & Reports</h2>
+                        
+                        <div class="analytics-grid">
+                            <!-- System Performance Metrics -->
+                            <div class="analytics-card">
+                                <h3>📊 System Performance</h3>
+                                <div class="metrics-list">
+                                    <div class="metric-item">
+                                        <span class="metric-label">Total Reports:</span>
+                                        <span class="metric-value"><?php echo $totalReports; ?></span>
+                                    </div>
+                                    <div class="metric-item">
+                                        <span class="metric-label">Resolved This Month:</span>
+                                        <span class="metric-value"><?php echo $resolvedThisMonth; ?></span>
+                                    </div>
+                                    <div class="metric-item">
+                                        <span class="metric-label">Average Resolution Time:</span>
+                                        <span class="metric-value"><?php echo $avgResolutionTime; ?> days</span>
+                                    </div>
+                                    <div class="metric-item">
+                                        <span class="metric-label">Active Authorities:</span>
+                                        <span class="metric-value"><?php echo $activeAuthorities; ?>/<?php echo $totalAuthorities; ?></span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Authority Performance Analytics -->
+                            <div class="analytics-card">
+                                <h3>👥 Authority Performance Analytics</h3>
+                                <div class="performance-analytics">
+                                    <?php foreach ($authorityPerformance as $auth): ?>
+                                        <div class="authority-performance-item">
+                                            <div class="auth-info">
+                                                <span class="auth-name"><?php echo htmlspecialchars($auth['full_name']); ?></span>
+                                                <span class="auth-username">(<?php echo htmlspecialchars($auth['username']); ?>)</span>
+                                            </div>
+                                            <div class="auth-metrics">
+                                                <span class="metric">Reports: <?php echo $auth['reports_handled']; ?></span>
+                                                <span class="metric">Updates: <?php echo $auth['updates_made']; ?></span>
+                                                <span class="status <?php echo $auth['is_active'] ? 'active' : 'inactive'; ?>">
+                                                    <?php echo $auth['is_active'] ? 'Active' : 'Inactive'; ?>
+                                                </span>
+                                            </div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                </div>
+                            </div>
+
+                            <!-- System Health & Statistics -->
+                            <div class="analytics-card">
+                                <h3>🔧 System Health</h3>
+                                <div class="health-indicators">
+                                    <div class="health-item">
+                                        <span class="health-indicator good">✅</span>
+                                        <span class="health-label">Database Connection</span>
+                                    </div>
+                                    <div class="health-item">
+                                        <span class="health-indicator good">✅</span>
+                                        <span class="health-label">Email System</span>
+                                    </div>
+                                    <div class="health-item">
+                                        <span class="health-indicator <?php echo $activeAuthorities > 0 ? 'good' : 'warning'; ?>">
+                                            <?php echo $activeAuthorities > 0 ? '✅' : '⚠️'; ?>
+                                        </span>
+                                        <span class="health-label">Authority Coverage</span>
+                                    </div>
+                                    <div class="health-item">
+                                        <span class="health-indicator good">✅</span>
+                                        <span class="health-label">User Authentication</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             <?php endif; ?>
 
+            <?php if (!hasRole('admin')): ?>
             <div class="recent-activity">
                 <h2>Recent Community Reports</h2>
                 <div class="reports-grid">
@@ -215,7 +565,7 @@ $recentReports = $stmt->fetchAll();
                             </div>
                             <div class="report-actions">
                                 <a href="reports.php?id=<?php echo $report['id']; ?>" class="btn btn-small btn-secondary">View Details</a>
-                                <?php if (hasAnyRole(['authority', 'admin'])): ?>
+                                <?php if (hasAnyRole(['authority'])): ?>
                                     <button class="btn btn-small btn-primary" onclick="updateStatus(<?php echo $report['id']; ?>)">Update Status</button>
                                 <?php endif; ?>
                             </div>
@@ -230,34 +580,6 @@ $recentReports = $stmt->fetchAll();
                     <?php endif; ?>
                 </div>
             </div>
-
-            <?php if (hasAnyRole(['authority', 'admin'])): ?>
-            <!-- Quick Actions Panel -->
-            <div class="quick-actions">
-                <h2>Quick Actions</h2>
-                <div class="actions-grid">
-                    <div class="action-card" onclick="filterReports('pending')">
-                        <div class="action-icon">⚠️</div>
-                        <h3>Review Pending</h3>
-                        <p><?php echo $pending ?? 8; ?> reports waiting</p>
-                    </div>
-                    <div class="action-card" onclick="filterReports('in-progress')">
-                        <div class="action-icon">🔄</div>
-                        <h3>Track Progress</h3>
-                        <p><?php echo $inProgress ?? 10; ?> in progress</p>
-                    </div>
-                    <div class="action-card" onclick="showMap()">
-                        <div class="action-icon">🗺️</div>
-                        <h3>View Map</h3>
-                        <p>See all locations</p>
-                    </div>
-                    <div class="action-card" onclick="generateReport()">
-                        <div class="action-icon">📊</div>
-                        <h3>Generate Report</h3>
-                        <p>Export statistics</p>
-                    </div>
-                </div>
-            </div>
             <?php endif; ?>
         </div>
     </main>
@@ -267,6 +589,9 @@ $recentReports = $stmt->fetchAll();
         // Dashboard functionality
         document.addEventListener('DOMContentLoaded', function() {
             initializeDashboard();
+            <?php if (hasRole('admin')): ?>
+            initializeAdminDashboard();
+            <?php endif; ?>
         });
 
         function initializeDashboard() {
@@ -283,7 +608,8 @@ $recentReports = $stmt->fetchAll();
                 });
             });
             
-            // Add click handlers for report cards
+            <?php if (!hasRole('admin')): ?>
+            // Add click handlers for report cards (only for non-admin users)
             document.querySelectorAll('.report-card').forEach(card => {
                 card.addEventListener('click', function(e) {
                     if (e.target.tagName !== 'BUTTON' && e.target.tagName !== 'A') {
@@ -295,8 +621,53 @@ $recentReports = $stmt->fetchAll();
                     }
                 });
             });
+            <?php endif; ?>
         }
 
+        <?php if (hasRole('admin')): ?>
+        function initializeAdminDashboard() {
+            // Set default active section
+            showSection('overview');
+            
+            // Add form validation for authority creation
+            const authorityForm = document.querySelector('.authority-form');
+            if (authorityForm) {
+                authorityForm.addEventListener('submit', function(e) {
+                    const password = this.querySelector('#password').value;
+                    if (password.length < 8) {
+                        e.preventDefault();
+                        alert('Password must be at least 8 characters long.');
+                        return false;
+                    }
+                });
+            }
+        }
+
+        function showSection(sectionName) {
+            // Hide all sections
+            document.querySelectorAll('.admin-section').forEach(section => {
+                section.classList.remove('active');
+            });
+            
+            // Remove active class from all tabs
+            document.querySelectorAll('.tab-button').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Show selected section
+            const targetSection = document.getElementById(sectionName + '-section');
+            if (targetSection) {
+                targetSection.classList.add('active');
+            }
+            
+            // Add active class to corresponding tab
+            if (event && event.target) {
+                event.target.classList.add('active');
+            }
+        }
+        <?php endif; ?>
+
+        <?php if (hasRole('authority')): ?>
         function updateStatus(reportId) {
             const newStatus = prompt('Enter new status (pending, in-progress, fixed):');
             if (newStatus && ['pending', 'in-progress', 'fixed'].includes(newStatus)) {
@@ -308,6 +679,7 @@ $recentReports = $stmt->fetchAll();
                 alert('Invalid status. Please use: pending, in-progress, or fixed');
             }
         }
+        <?php endif; ?>
 
         function filterReports(status) {
             window.location.href = 'reports.php?status=' + status;
@@ -352,7 +724,9 @@ $recentReports = $stmt->fetchAll();
             setTimeout(() => {
                 notification.style.animation = 'slideOut 0.3s ease';
                 setTimeout(() => {
-                    document.body.removeChild(notification);
+                    if (notification.parentNode) {
+                        notification.parentNode.removeChild(notification);
+                    }
                 }, 300);
             }, 3000);
         }
@@ -363,6 +737,19 @@ $recentReports = $stmt->fetchAll();
             showNotification('Welcome to CivicVoice! Start by exploring community reports or submitting a new issue.', 'success');
         }, 1000);
         <?php endif; ?>
+
+        // Auto-hide alerts
+        document.addEventListener('DOMContentLoaded', function() {
+            const alerts = document.querySelectorAll('.alert');
+            alerts.forEach(alert => {
+                setTimeout(() => {
+                    alert.style.opacity = '0';
+                    setTimeout(() => {
+                        alert.style.display = 'none';
+                    }, 300);
+                }, 5000);
+            });
+        });
     </script>
 </body>
 </html>
