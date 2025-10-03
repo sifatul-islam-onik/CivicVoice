@@ -161,10 +161,12 @@ if (!hasRole('admin')) {
                     <a href="dashboard.php">CivicVoice</a>
                 </div>
                 <ul class="nav-menu">
+                    <?php if (!hasRole('admin')): ?>
                     <li class="nav-item">
                         <a href="dashboard.php" class="nav-link active">Dashboard</a>
                     </li>
-                    <?php if (hasAnyRole(['citizen', 'authority'])): ?>
+                    <?php endif; ?>
+                    <?php if (hasAnyRole(['citizen'])): ?>
                     <li class="nav-item">
                         <a href="report.php" class="nav-link">Report Issue</a>
                     </li>
@@ -174,14 +176,14 @@ if (!hasRole('admin')) {
                         <a href="reports.php" class="nav-link">All Reports</a>
                     </li>
                     <?php endif; ?>
-                    <?php if (hasRole('admin')): ?>
+                    <!-- <?php if (hasRole('admin')): ?>
                     <li class="nav-item">
                         <a href="#authorities" class="nav-link" onclick="showSection('authorities')">Manage Authorities</a>
                     </li>
                     <li class="nav-item">
                         <a href="#analytics" class="nav-link" onclick="showSection('analytics')">System Analytics</a>
                     </li>
-                    <?php endif; ?>
+                    <?php endif; ?> -->
                 </ul>
                 <div class="nav-user">
                     <div class="user-menu">
@@ -255,7 +257,7 @@ if (!hasRole('admin')) {
                 <div class="dashboard-actions">
                     <a href="reports.php?status=pending" class="btn btn-primary">⚠️ Review Pending Reports</a>
                     <a href="reports.php" class="btn btn-secondary">📊 View All Reports</a>
-                    <a href="report.php" class="btn btn-secondary">📍 Report Issue</a>
+                    <!-- <a href="report.php" class="btn btn-secondary">📍 Report Issue</a> -->
                 </div>
 
             <?php elseif (hasRole('admin')): ?>
@@ -572,13 +574,6 @@ if (!hasRole('admin')) {
                         </div>
                     <?php endforeach; ?>
                 </div>
-                
-                <div class="activity-footer">
-                    <a href="reports.php" class="btn btn-secondary">View All Reports</a>
-                    <?php if (hasRole('citizen')): ?>
-                        <a href="report.php" class="btn btn-primary">Report New Issue</a>
-                    <?php endif; ?>
-                </div>
             </div>
             <?php endif; ?>
         </div>
@@ -671,14 +666,28 @@ if (!hasRole('admin')) {
         function updateStatus(reportId) {
             const newStatus = prompt('Enter new status (pending, in-progress, fixed):');
             if (newStatus && ['pending', 'in-progress', 'fixed'].includes(newStatus)) {
-                // Simulate status update
-                alert('Status updated to: ' + newStatus);
-                // In real implementation, this would make an AJAX call
-                location.reload();
+                fetch('reports.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: `action=update_status&report_id=${encodeURIComponent(reportId)}&new_status=${encodeURIComponent(newStatus)}`
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        alert('Status updated to: ' + newStatus);
+                        location.reload();
+                    } else {
+                        alert('Failed: ' + data.message);
+                    }
+                })
+                .catch(() => {
+                    alert('Error updating status.');
+                });
             } else if (newStatus) {
                 alert('Invalid status. Please use: pending, in-progress, or fixed');
             }
         }
+
         <?php endif; ?>
 
         function filterReports(status) {
@@ -729,6 +738,31 @@ if (!hasRole('admin')) {
                     }
                 }, 300);
             }, 3000);
+        }
+        function updateReportStatus(reportId, newStatus) {
+            if (!newStatus) return;
+            if (!confirm(`Change status to "${newStatus.replace('-', ' ')}"?`)) return;
+
+            fetch('reports.php', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: `action=update_status&report_id=${encodeURIComponent(reportId)}&new_status=${encodeURIComponent(newStatus)}`
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    // Update status badge without reload
+                    const badge = document.querySelector(`.report-item[data-id="${reportId}"] .status-badge`);
+                    if (badge) {
+                        badge.textContent = newStatus.replace('-', ' ').replace(/\b\w/g, c => c.toUpperCase());
+                        badge.className = `status-badge status-${newStatus}`;
+                    }
+                    alert('Status updated successfully!');
+                } else {
+                    alert('Failed: ' + data.message);
+                }
+            })
+            .catch(() => alert('Error updating status.'));
         }
 
         // Welcome message for new users

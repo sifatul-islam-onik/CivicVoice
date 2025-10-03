@@ -42,6 +42,44 @@ $totalReports = executeQuery("SELECT COUNT(*) FROM reports")->fetchColumn();
 $pendingCount = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'pending'")->fetchColumn();
 $inProgressCount = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'in-progress'")->fetchColumn();
 $fixedCount = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed'")->fetchColumn();
+
+// Handle AJAX status update
+if (
+    isset($_POST['action']) && $_POST['action'] === 'update_status'
+    && isset($_POST['report_id'], $_POST['new_status'])
+    && hasAnyRole(['authority', 'admin'])
+) {
+    $reportId = (int)$_POST['report_id'];
+    $newStatus = $_POST['new_status'];
+    $allowed = ['pending', 'in-progress', 'fixed'];
+
+    if (!in_array($newStatus, $allowed, true)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Invalid status']);
+        exit;
+    }
+
+    // Fetch current status
+    $stmt = executeQuery("SELECT status FROM reports WHERE id = ?", [$reportId]);
+    $oldStatus = $stmt->fetchColumn();
+
+    if (!$oldStatus || $oldStatus === $newStatus) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'message' => 'Invalid or unchanged status']);
+        exit;
+    }
+
+    // Update report status
+    executeQuery("UPDATE reports SET status = ?, updated_at = NOW() WHERE id = ?", [$newStatus, $reportId]);
+    // Log status update
+    executeQuery(
+        "INSERT INTO status_updates (report_id, updated_by_user_id, old_status, new_status) VALUES (?, ?, ?, ?)",
+        [$reportId, $user['id'], $oldStatus, $newStatus]
+    );
+
+    echo json_encode(['success' => true, 'message' => 'Status updated']);
+    exit;
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -64,9 +102,11 @@ $fixedCount = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed'"
                     <li class="nav-item">
                         <a href="dashboard.php" class="nav-link">Dashboard</a>
                     </li>
+                    <?php if (!hasAnyRole(['authority'])): ?>
                     <li class="nav-item">
                         <a href="report.php" class="nav-link ">Report Issue</a>
                     </li>
+                    <?php endif; ?>
                     <?php if (hasAnyRole(['citizen', 'authority'])): ?>
                     <li class="nav-item">
                         <a href="reports.php" class="nav-link active">All reports</a>
@@ -240,9 +280,12 @@ $fixedCount = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed'"
                             </div>
                             
                             <div class="report-actions">
-                                <button class="btn btn-small btn-secondary" onclick="viewOnMap(<?php echo $report['latitude'] ?: 'null'; ?>, <?php echo $report['longitude'] ?: 'null'; ?>)">
-                                    🗺️ View on Map
-                                </button>
+                                <button class="btn btn-small btn-secondary" onclick="viewOnMap(
+    <?php echo $report['latitude'] ?: 'null'; ?>, 
+    <?php echo $report['longitude'] ?: 'null'; ?>, 
+    '<?php echo htmlspecialchars(addslashes($report['location'])); ?>')">
+    🗺️ View on Map
+</button>
                                 
                                 <?php if (hasAnyRole(['authority', 'admin'])): ?>
                                     <select class="status-update" onchange="updateReportStatus(<?php echo $report['id']; ?>, this.value)">
@@ -264,7 +307,7 @@ $fixedCount = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed'"
 
             <!-- Action Buttons -->
             <div class="reports-actions">
-                <?php if (hasAnyRole(['citizen', 'authority'])): ?>
+                <?php if (hasAnyRole(['citizen'])): ?>
                     <a href="report.php" class="btn btn-primary">📍 Report New Issue</a>
                 <?php endif; ?>
                 <button onclick="exportReports()" class="btn btn-secondary">📊 Export Data</button>
@@ -278,20 +321,56 @@ $fixedCount = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed'"
         <img id="modalImage" src="" alt="Report image">
     </div>
 
+    <!-- Map Modal -->
+    <div id="mapModal" class="modal" onclick="closeMapModal()">
+        <div class="modal-content" onclick="event.stopPropagation()">
+            <span class="close" onclick="closeMapModal()">&times;</span>
+            <div id="mapAreaName" style="font-weight:bold; margin-bottom:8px;"></div>
+            <iframe id="mapFrame" width="100%" height="400" frameborder="0" style="border:0" allowfullscreen></iframe>
+        </div>
+    </div>
+
+    <!-- Map View Modal -->
+    <div id="allMapModal" class="modal" onclick="closeAllMapModal()">
+        <div class="modal-content" style="max-width:900px;width:95vw;" onclick="event.stopPropagation()">
+            <span class="close" onclick="closeAllMapModal()">&times;</span>
+            <h3 style="margin-bottom:8px;">All Reported Areas</h3>
+            <div id="allMap" style="width:100%;height:500px;border-radius:8px;"></div>
+        </div>
+    </div>
+
     <script>
         // Report functionality
         function updateReportStatus(reportId, newStatus) {
             if (!newStatus) return;
-            
-            if (confirm(`Are you sure you want to change the status to "${newStatus.replace('-', ' ')}"?`)) {
-                // Simulate API call
-                alert(`Status updated to: ${newStatus.replace('-', ' ')}`);
-                location.reload();
-            }
+            if (!confirm(`Are you sure you want to change the status to "${newStatus.replace('-', ' ')}"?`)) return;
+
+            fetch('reports.php', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: `action=update_status&report_id=${encodeURIComponent(reportId)}&new_status=${encodeURIComponent(newStatus)}`
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Status updated successfully!');
+                    location.reload();
+                } else {
+                    alert('Failed: ' + data.message);
+                }
+            })
+            .catch(() => alert('Error updating status.'));
         }
 
-        function viewOnMap(lat, lng) {
-            alert(`Opening map view for coordinates: ${lat}, ${lng}\n(Google Maps integration would be implemented here)`);
+        function viewOnMap(lat, lng, areaName) {
+            if (!lat || !lng) {
+                alert('Location not available for this report.');
+                return;
+            }
+            document.getElementById('mapAreaName').textContent = areaName || '';
+            const mapUrl = `https://www.google.com/maps?q=${lat},${lng}&hl=es;z=16&output=embed`;
+            document.getElementById('mapFrame').src = mapUrl;
+            document.getElementById('mapModal').style.display = 'flex';
         }
 
         function shareReport(reportId) {
@@ -310,11 +389,62 @@ $fixedCount = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed'"
         }
 
         function exportReports() {
-            alert('Export functionality would generate CSV/PDF reports here');
+            window.location.href = "export_reports.php";
         }
 
         function toggleMapView() {
-            alert('Map view would show all reports on an interactive map');
+            document.getElementById('allMapModal').style.display = 'flex';
+            setTimeout(initAllMap, 100); // Ensure modal is visible before rendering map
+        }
+
+        function initAllMap() {
+    if (!reportsData.length) {
+        document.getElementById('allMap').innerHTML = '<p style="text-align:center;">No locations to display.</p>';
+        return;
+    }
+
+    const center = {lat: parseFloat(reportsData[0].lat), lng: parseFloat(reportsData[0].lng)};
+    allMap = new google.maps.Map(document.getElementById('allMap'), {
+        zoom: 12,
+        center: center
+    });
+
+    google.maps.event.addListenerOnce(allMap, 'idle', function() {
+        google.maps.event.trigger(allMap, 'resize');
+        allMap.setCenter(center); // recenters properly
+    });
+
+    allMarkers.forEach(m => m.setMap(null));
+    allMarkers = [];
+
+    reportsData.forEach(report => {
+        const marker = new google.maps.Marker({
+            position: {lat: parseFloat(report.lat), lng: parseFloat(report.lng)},
+            map: allMap,
+            title: report.title,
+            label: report.category[0].toUpperCase()
+        });
+
+        const info = new google.maps.InfoWindow({
+            content: `<strong>${report.title}</strong><br>
+                      <span>${report.location}</span><br>
+                      <span>Status: ${report.status.replace('-', ' ')}</span><br>
+                      <a href="reports.php?id=${report.id}" target="_blank">View Details</a>`
+        });
+        marker.addListener('click', () => info.open(allMap, marker));
+        allMarkers.push(marker);
+    });
+
+    if (allMarkers.length > 1) {
+        const bounds = new google.maps.LatLngBounds();
+        allMarkers.forEach(m => bounds.extend(m.getPosition()));
+        allMap.fitBounds(bounds);
+    }
+}
+
+
+        function closeAllMapModal() {
+            document.getElementById('allMapModal').style.display = 'none';
         }
 
         function openImageModal(src) {
@@ -326,6 +456,32 @@ $fixedCount = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed'"
             document.getElementById('imageModal').style.display = 'none';
         }
 
+        function closeMapModal() {
+            document.getElementById('mapModal').style.display = 'none';
+            document.getElementById('mapFrame').src = '';
+        }
+
+        // Prepare reports data for map view
+        const reportsData = <?php
+            $mapReports = [];
+            foreach ($reports as $r) {
+                if (!empty($r['latitude']) && !empty($r['longitude'])) {
+                    $mapReports[] = [
+                        'title' => $r['title'],
+                        'location' => $r['location'],
+                        'lat' => $r['latitude'],
+                        'lng' => $r['longitude'],
+                        'status' => $r['status'],
+                        'category' => $r['category'],
+                        'id' => $r['id']
+                    ];
+                }
+            }
+            echo json_encode($mapReports);
+        ?>;
+
+        let allMap, allMarkers = [];
+
         // Auto-submit form when filters change
         document.querySelectorAll('.filter-form select').forEach(select => {
             select.addEventListener('change', function() {
@@ -333,5 +489,34 @@ $fixedCount = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed'"
             });
         });
     </script>
+
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCskAowPO-5o7MbetcjCQXczbIyJj5OieU"></script>
+    <style>
+        /* Add styles for the map modal */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0; top: 0; width: 100vw; height: 100vh;
+            background: rgba(0,0,0,0.6);
+            align-items: center; justify-content: center;
+        }
+        .modal-content {
+            background: #fff;
+            padding: 1em;
+            border-radius: 8px;
+            position: relative;
+            max-width: 600px;
+            width: 90vw;
+        }
+        .modal .close {
+            position: absolute;
+            top: 8px; right: 16px;
+            font-size: 2em;
+            cursor: pointer;
+        }
+        #mapFrame { border-radius: 8px; }
+        #allMap { min-height: 400px; }
+    </style>
 </body>
 </html>

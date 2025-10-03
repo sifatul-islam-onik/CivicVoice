@@ -1,5 +1,10 @@
 /* Enhanced Reports Page Styling */
-
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
+    line-height: 1.6;
+    color: #333;
+    overflow-x: hidden;
+}
 .reports-main {
     min-height: calc(100vh - 80px);
     background: #f8f9fa;
@@ -273,6 +278,7 @@
     border-radius: 6px;
     background: white;
     font-size: 0.85rem;
+    height: 40px;
 }
 
 /* No Reports State */
@@ -327,7 +333,11 @@
     border-radius: 8px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
 }
-
+.report-actions button,
+.report-actions select.status-update {
+    height: 40px;      
+    align-items: center;
+}
 /* Responsive Design */
 @media (max-width: 768px) {
     .reports-container {

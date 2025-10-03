@@ -62,6 +62,8 @@ $page_title = "Register - CivicVoice";
     <title><?php echo $page_title; ?></title>
     <link rel="stylesheet" href="assets/css/auth.css">
     <link rel="stylesheet" href="assets/css/style.css">
+    <!-- Add this line in the <head> section -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 </head>
 <body>
     <div class="auth-container">
@@ -103,15 +105,26 @@ $page_title = "Register - CivicVoice";
                 </div>
                 
                 <div class="form-group">
-                    <label for="password">Password *</label>
-                    <input type="password" id="password" name="password" required 
-                           placeholder="Enter password (min. <?php echo PASSWORD_MIN_LENGTH; ?> characters)">
+                    <label for="password">Password</label>
+                    <div class="password-wrapper" style="position:relative;">
+                        <input type="password" id="password" name="password" required placeholder="Enter password (min. <?php echo PASSWORD_MIN_LENGTH; ?> characters)">
+                        <span class="material-icons toggle-password"
+                            onclick="togglePassword('password', this)"
+                            style="position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer;">
+
+                        </span>
+                    </div>
                 </div>
                 
                 <div class="form-group">
-                    <label for="confirm_password">Confirm Password *</label>
-                    <input type="password" id="confirm_password" name="confirm_password" required 
-                           placeholder="Confirm your password">
+                    <label for="confirm_password">Confirm Password</label>
+                    <div class="password-wrapper" style="position:relative;">
+                        <input type="password" id="confirm_password" name="confirm_password" required placeholder="Confirm your password">
+                        <span class="material-icons toggle-password"
+                            onclick="togglePassword('confirm_password', this)"
+                            style="position:absolute;right:10px;top:50%;transform:translateY(-50%);cursor:pointer;">
+                        </span>
+                    </div>
                 </div>
                 
                 <button type="submit" class="btn btn-primary btn-full">Create Account</button>
@@ -152,6 +165,16 @@ $page_title = "Register - CivicVoice";
                 this.setCustomValidity('');
             }
         });
+        function togglePassword(inputId, icon) {
+            const input = document.getElementById(inputId);
+            if (input.type === "password") {
+                input.type = "text";
+                icon.textContent = "visibility_off";
+            } else {
+                input.type = "password";
+                icon.textContent = "visibility";
+            }
+        }
     </script>
 </body>
 </html>
