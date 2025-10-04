@@ -347,6 +347,10 @@ body {
     word-break: break-word;
     overflow-wrap: anywhere;
 }
+.authorities-table .status-badge,
+.authorities-table .table-actions .btn {
+    white-space: nowrap;
+}
 
 /* General fix for any container */
 .dashboard-container, 
@@ -610,10 +614,12 @@ body {
 
 .table-responsive {
     overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 .authorities-table {
     width: 100%;
+    min-width: 800px;
     border-collapse: collapse;
     margin: 0;
 }
@@ -644,7 +650,9 @@ body {
 .table-actions {
     display: flex;
     gap: 0.5rem;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: flex-start;
 }
 
 .btn-small {
@@ -928,16 +936,31 @@ body {
     }
     
     .table-responsive {
-        font-size: 0.9rem;
+        font-size: 0.85rem;
+    }
+    
+    .authorities-table {
+        min-width: 700px;
     }
     
     .authorities-table th,
     .authorities-table td {
-        padding: 0.75rem 0.5rem;
+        padding: 0.6rem 0.4rem;
+        font-size: 0.8rem;
     }
     
     .table-actions {
-        flex-direction: column;
+        flex-direction: row;
+        flex-wrap: nowrap;
+        gap: 0.2rem;
+        justify-content: flex-start;
+    }
+    
+    .table-actions .btn {
+        font-size: 0.7rem;
+        padding: 0.25rem 0.4rem;
+        white-space: nowrap;
+        flex-shrink: 0;
     }
     
     .analytics-grid,
@@ -948,5 +971,57 @@ body {
     .auth-metrics {
         flex-direction: column;
         align-items: flex-start;
+    }
+}
+
+/* Extra small screens - prevent table breaking */
+@media (max-width: 600px) {
+    .authorities-table-container {
+        padding: 1rem;
+        margin: 1rem 0;
+    }
+    
+    .authorities-table-container h3 {
+        font-size: 1.1rem;
+        margin-bottom: 1rem;
+    }
+    
+    .table-responsive {
+        font-size: 0.75rem;
+        border: 1px solid #e1e5e9;
+        border-radius: 8px;
+    }
+    
+    .authorities-table {
+        min-width: 600px;
+    }
+    
+    .authorities-table th,
+    .authorities-table td {
+        padding: 0.4rem 0.3rem;
+        font-size: 0.7rem;
+    }
+    
+    .table-actions {
+        flex-direction: row;
+        flex-wrap: nowrap;
+        gap: 0.15rem;
+        min-width: 120px;
+        justify-content: flex-start;
+    }
+    
+    .table-actions .btn {
+        font-size: 0.6rem;
+        padding: 0.2rem 0.3rem;
+        min-width: 40px;
+        white-space: nowrap;
+        flex-shrink: 0;
+        text-overflow: ellipsis;
+        overflow: hidden;
+    }
+    
+    .status-badge {
+        font-size: 0.65rem;
+        padding: 0.2rem 0.4rem;
     }
 }
