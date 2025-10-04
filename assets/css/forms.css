@@ -1,5 +1,10 @@
 /* Enhanced Forms Styling */
 
+/* Ensure all elements use border-box sizing */
+*, *::before, *::after {
+    box-sizing: border-box;
+}
+
 .form-main {
     min-height: calc(100vh - 80px);
     background: #f8f9fa;
@@ -93,6 +98,7 @@
     font-size: 1rem;
     transition: all 0.3s ease;
     background-color: #f8f9fa;
+    box-sizing: border-box;
 }
 
 .form-group input:focus,

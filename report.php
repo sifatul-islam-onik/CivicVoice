@@ -4,6 +4,13 @@ require_once 'includes/auth_functions.php';
 
 // Require login
 requireLogin();
+$success = '';
+$error = '';
+
+// Check success message from redirect
+if (isset($_GET['success']) && $_GET['success'] == 1) {
+    $success = "Your report has been submitted successfully! You will be notified when authorities review your report.";
+}
 
 $user = getCurrentUser();
 $page_title = "Report Issue - CivicVoice";
@@ -68,12 +75,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $priority
                 ]
             );
-            $success = "Your report has been submitted successfully! You will be notified when authorities review your report.";
-
-            // Clear form data
-            $title = $description = $location = '';
-            $category = $priority = '';
-            $latitude = $longitude = null;
+            // Redirect (prevents resubmission on refresh)
+            header("Location: report.php?success=1");
+            exit;
         } catch (Exception $e) {
             $error = 'Failed to submit report: ' . $e->getMessage();
         }
@@ -87,7 +91,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title><?php echo $page_title; ?></title>
-    <link rel="stylesheet" href="assets/css/style.css">
+    <!-- <link rel="stylesheet" href="assets/css/style.css"> -->
     <link rel="stylesheet" href="assets/css/dashboard.css">
     <link rel="stylesheet" href="assets/css/forms.css">
 </head>
