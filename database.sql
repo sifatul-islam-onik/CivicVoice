@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS reports (
     location VARCHAR(500) NOT NULL,
     latitude DECIMAL(10, 8) NULL,
     longitude DECIMAL(11, 8) NULL,
-    status ENUM('pending', 'in-progress', 'fixed') DEFAULT 'pending',
+    status ENUM('pending', 'in-progress', 'fixed', 'rejected') DEFAULT 'pending',
     photo_path VARCHAR(255) NULL,
     priority ENUM('low', 'medium', 'high') DEFAULT 'medium',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -53,8 +53,8 @@ CREATE TABLE IF NOT EXISTS status_updates (
     id INT AUTO_INCREMENT PRIMARY KEY,
     report_id INT NOT NULL,
     updated_by_user_id INT NOT NULL,
-    old_status ENUM('pending', 'in-progress', 'fixed') NOT NULL,
-    new_status ENUM('pending', 'in-progress', 'fixed') NOT NULL,
+    old_status ENUM('pending', 'in-progress', 'fixed', 'rejected') NOT NULL,
+    new_status ENUM('pending', 'in-progress', 'fixed', 'rejected') NOT NULL,
     update_note TEXT NULL,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (report_id) REFERENCES reports(id) ON DELETE CASCADE,
@@ -107,3 +107,14 @@ CREATE INDEX idx_password_reset_tokens_token ON password_reset_tokens(token);
 CREATE INDEX idx_password_reset_tokens_expires ON password_reset_tokens(expires_at);
 CREATE INDEX idx_password_reset_tokens_user_id ON password_reset_tokens(user_id);
 CREATE INDEX idx_password_reset_tokens_email ON password_reset_tokens(email);
+
+-- Notifications table for in-app notifications
+CREATE TABLE IF NOT EXISTS notifications (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    body TEXT NULL,
+    is_read TINYINT(1) NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);

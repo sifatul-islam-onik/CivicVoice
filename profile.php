@@ -36,16 +36,73 @@ if (hasAnyRole(['authority', 'admin'])) {
     $pending = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'pending'")->fetchColumn();
     $inProgress = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'in-progress'")->fetchColumn();
     $fixed = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed'")->fetchColumn();
+    $rejected = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'rejected'")->fetchColumn();
 } else {
     // Citizens see only their own reports
     $myReports = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ?", [$user['id']])->fetchColumn();
     $pending = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ? AND status = 'pending'", [$user['id']])->fetchColumn();
     $inProgress = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ? AND status = 'in-progress'", [$user['id']])->fetchColumn();
     $fixed = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ? AND status = 'fixed'", [$user['id']])->fetchColumn();
+    $rejected = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ? AND status = 'rejected'", [$user['id']])->fetchColumn();
 }
 
 // Handle profile update
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Handle account deletion separately
+    if (isset($_POST['action']) && $_POST['action'] === 'delete_account') {
+        $currentPassword = $_POST['current_password'] ?? '';
+        if (empty($currentPassword)) {
+            $error = 'Please enter your current password to confirm account deletion.';
+        } else {
+            try {
+                $stmt = executeQuery("SELECT id, password_hash FROM users WHERE id = ?", [$user['id']]);
+                $u = $stmt->fetch();
+                if (!$u || !password_verify($currentPassword, $u['password_hash'])) {
+                    $error = 'Incorrect password. Account not deleted.';
+                } else {
+                    // Delete user uploads: report photos and avatar
+                    $stmt = executeQuery("SELECT photo_path FROM reports WHERE user_id = ? AND photo_path IS NOT NULL", [$user['id']]);
+                    $photos = $stmt->fetchAll();
+                    foreach ($photos as $p) {
+                        if (!empty($p['photo_path']) && defined('UPLOAD_DIR') && UPLOAD_DIR) {
+                            $safe = basename($p['photo_path']);
+                            $path = rtrim(UPLOAD_DIR, '/\\') . DIRECTORY_SEPARATOR . $safe;
+                            if (file_exists($path) && is_file($path)) @unlink($path);
+                        }
+                    }
+
+                    // Delete avatar if exists
+                    $avatarPath = __DIR__ . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'avatars' . DIRECTORY_SEPARATOR . $user['id'] . '.jpg';
+                    if (file_exists($avatarPath) && is_file($avatarPath)) @unlink($avatarPath);
+
+                    // Notify all active authorities that this user deleted their account
+                    try {
+                        $stmtAuth = executeQuery("SELECT id, full_name, email FROM users WHERE role = 'authority' AND is_active = 1", []);
+                        $authorities = $stmtAuth->fetchAll();
+                        foreach ($authorities as $auth) {
+                            $notifTitle = 'User account deleted';
+                            $notifBody = sprintf('User "%s" has deleted their account.', $user['full_name']);
+                            createNotification($auth['id'], $notifTitle, $notifBody);
+                        }
+                    } catch (Exception $e) {
+                        error_log('Failed to notify authorities on account deletion: ' . $e->getMessage());
+                    }
+
+                    // Delete the user (cascade will remove reports, comments, status_updates)
+                    executeQuery("DELETE FROM users WHERE id = ?", [$user['id']]);
+
+                    // Logout and redirect
+                    logout();
+                    header('Location: index.php?account_deleted=1');
+                    exit;
+                }
+            } catch (Exception $e) {
+                error_log('Account deletion error: ' . $e->getMessage());
+                $error = 'Failed to delete account. Please try again later.';
+            }
+        }
+    }
+
     $full_name = trim($_POST['full_name'] ?? '');
     $email = trim($_POST['email'] ?? '');
     $phone = trim($_POST['phone'] ?? '');
@@ -166,6 +223,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <h4>Fixed</h4>
                     <div class="stat-number"><?php echo $fixed; ?></div>
                 </div>
+                <div class="stat-card">
+                    <h4>Rejected</h4>
+                    <div class="stat-number"><?php echo $rejected; ?></div>
+                </div>
             </div>
             <?php if ($error): ?>
                 <div class="alert alert-error"><?php echo htmlspecialchars($error); ?></div>
@@ -186,17 +247,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <input type="text" id="phone" name="phone" value="<?php echo htmlspecialchars($user['phone'] ?? ''); ?>">
                 <button type="submit" class="btn-primary">Update Profile</button>
             </form>
+            <!-- Delete account -->
+            <?php if ($user['role'] === 'citizen'): ?>
+            <form method="POST" class="profile-form no-ajax" onsubmit="return confirm('Are you sure you want to permanently delete your account? This cannot be undone.');" style="margin-top:16px;">
+                <input type="hidden" name="action" value="delete_account">
+                <label for="current_password">Confirm with Current Password</label>
+                <input type="password" id="current_password" name="current_password" placeholder="Enter your current password" required>
+                <button type="submit" class="btn-primary" style="background:#e53935; border:none; margin-top:12px;">Delete Account</button>
+            </form>
+            <?php endif; ?>
             <a href="dashboard.php" class="btn-secondary">← Back to Dashboard</a>
         </div>
     </div>
 
     <script>
     $(document).ready(function() {
-        // Handle form submission with AJAX
+        // Handle form submission with AJAX (skip forms marked .no-ajax)
         $('.profile-form').on('submit', function(e) {
+            const form = $(this);
+            if (form.hasClass('no-ajax')) {
+                // allow normal form submission (page reload/redirect) e.g. delete account
+                return true;
+            }
             e.preventDefault();
             
-            const form = $(this);
             const submitBtn = form.find('button[type="submit"]');
             const originalText = submitBtn.text();
             

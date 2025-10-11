@@ -289,8 +289,8 @@ $page_title = "CivicVoice - Community Issue Reporting Platform";
                     <h3>Contact</h3>
                     <ul>
                         <li><i class="fas fa-envelope"></i> hello@civicvoice.com</li>
-                        <li><i class="fas fa-phone"></i> +1 (555) 123-4567</li>
-                        <li><i class="fas fa-map-marker-alt"></i> Your City, Your State</li>
+                        <li><i class="fas fa-phone"></i> +880 1234 567890</li>
+                        <li><i class="fas fa-map-marker-alt"></i> Bangladesh</li>
                     </ul>
                 </div>
             </div>

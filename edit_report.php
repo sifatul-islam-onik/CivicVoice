@@ -2,23 +2,38 @@
 require_once 'config.php';
 require_once 'includes/auth_functions.php';
 
-// Require login
 requireLogin();
-$success = '';
-$error = '';
+$user = getCurrentUser();
 
-// Check success message from redirect
-if (isset($_GET['success']) && $_GET['success'] == 1) {
-    $success = "Your report has been submitted successfully! You will be notified when authorities review your report.";
+$reportId = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+if (!$reportId) {
+    header('Location: reports.php');
+    exit;
 }
 
-$user = getCurrentUser();
-$page_title = "Report Issue - CivicVoice";
+// Fetch report
+$stmt = executeQuery("SELECT * FROM reports WHERE id = ?", [$reportId]);
+$report = $stmt->fetch();
+if (!$report) {
+    header('Location: reports.php');
+    exit;
+}
 
-$success = '';
+// Only owner can edit
+if ($report['user_id'] != $user['id']) {
+    header('HTTP/1.1 403 Forbidden');
+    die('Access denied.');
+}
+
+// Only pending reports can be edited
+if ($report['status'] !== 'pending') {
+    header('Location: reports.php');
+    exit;
+}
+
 $error = '';
+$success = '';
 
-// Process form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $title = trim($_POST['title'] ?? '');
     $description = trim($_POST['description'] ?? '');
@@ -26,14 +41,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $location = trim($_POST['location'] ?? '');
     $latitude = trim($_POST['latitude'] ?? '');
     $longitude = trim($_POST['longitude'] ?? '');
+    $priority = $_POST['priority'] ?? 'medium';
 
-    // Convert empty latitude/longitude to null for database
     $latitude = ($latitude === '') ? null : $latitude;
     $longitude = ($longitude === '') ? null : $longitude;
 
-    $priority = $_POST['priority'] ?? 'medium';
-    
-    // Validation
+    // Basic validation
     if (empty($title) || empty($description) || empty($category) || empty($location)) {
         $error = 'All required fields must be filled.';
     } elseif (mb_strlen($title) > 60) {
@@ -42,130 +55,99 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'Description must not exceed 1000 characters.';
     } elseif (!in_array($category, ['streetlight', 'pothole', 'garbage', 'traffic', 'other'])) {
         $error = 'Invalid category selected.';
-    } elseif (!in_array($priority, ['low', 'medium', 'high'])) {
-        $error = 'Invalid priority level.';
+    } elseif (!in_array($priority, ['low','medium','high'])) {
+        $error = 'Invalid priority selected.';
     } else {
-        // Handle photo upload if provided (photo is optional)
-        $photo_path = null;
+        // Handle optional photo upload (same logic as report.php)
+        $photo_path = $report['photo_path'];
         if (
             isset($_FILES['photo']) &&
             $_FILES['photo']['error'] !== UPLOAD_ERR_NO_FILE &&
             $_FILES['photo']['error'] === UPLOAD_ERR_OK
         ) {
-            // Ensure upload directory is defined and exists
             if (!defined('UPLOAD_DIR') || !UPLOAD_DIR) {
-                throw new Exception('Upload directory is not configured.');
-            }
-
-            if (!is_dir(UPLOAD_DIR)) {
-                // Attempt to create the directory with recursive permissions
-                // Notify all authorities about the new report
-                try {
-                    $stmt = executeQuery("SELECT id, full_name, email FROM users WHERE role = 'authority' AND is_active = 1", []);
-                    $authorities = $stmt->fetchAll();
-                    foreach ($authorities as $auth) {
-                        $notifTitle = 'New report submitted';
-                        $notifBody = sprintf('A new report "%s" has been submitted by %s.', $title, $user['full_name']);
-                        createNotification($auth['id'], $notifTitle, $notifBody);
-                    }
-                } catch (Exception $e) {
-                    // Non-fatal: log but continue
-                    error_log('Failed to create notifications for authorities: ' . $e->getMessage());
-                }
-                if (!mkdir(UPLOAD_DIR, 0755, true) && !is_dir(UPLOAD_DIR)) {
-                    throw new Exception('Failed to create upload directory.');
-                }
-            }
-
-            // Validate file size and type using config constants
-            $allowed_types = defined('ALLOWED_IMAGE_TYPES') ? ALLOWED_IMAGE_TYPES : ['image/jpeg', 'image/png', 'image/gif'];
-            $max_size = defined('MAX_FILE_SIZE') ? (int)MAX_FILE_SIZE : 5 * 1024 * 1024;
-
-            $fileType = $_FILES['photo']['type'];
-            $fileSize = $_FILES['photo']['size'];
-
-            if (!in_array($fileType, $allowed_types)) {
-                throw new Exception('Invalid file type uploaded.');
-            }
-
-            if ($fileSize > $max_size) {
-                throw new Exception('Uploaded file exceeds maximum allowed size.');
-            }
-
-            // Determine extension safely
-            $finfo = finfo_open(FILEINFO_MIME_TYPE);
-            $mime = finfo_file($finfo, $_FILES['photo']['tmp_name']);
-            finfo_close($finfo);
-
-            $extMap = [
-                'image/jpeg' => 'jpg',
-                'image/png' => 'png',
-                'image/gif' => 'gif'
-            ];
-
-            $ext = isset($extMap[$mime]) ? $extMap[$mime] : pathinfo($_FILES['photo']['name'], PATHINFO_EXTENSION);
-
-            // Use timestamp-only filename as requested (e.g., 1760165657.jpg)
-            $timestamp = time();
-            $filename = $timestamp . '.' . $ext;
-
-            $target = rtrim(UPLOAD_DIR, '/\\') . DIRECTORY_SEPARATOR . $filename;
-
-            if (move_uploaded_file($_FILES['photo']['tmp_name'], $target)) {
-                // Optionally set file permissions
-                @chmod($target, 0644);
-                $photo_path = $filename;
+                $error = 'Upload directory not configured.';
             } else {
-                throw new Exception('Failed to move uploaded file.');
+                if (!is_dir(UPLOAD_DIR)) {
+                    if (!mkdir(UPLOAD_DIR, 0755, true) && !is_dir(UPLOAD_DIR)) {
+                        $error = 'Failed to create upload directory.';
+                    }
+                }
+
+                $allowed_types = defined('ALLOWED_IMAGE_TYPES') ? ALLOWED_IMAGE_TYPES : ['image/jpeg','image/png','image/gif'];
+                $max_size = defined('MAX_FILE_SIZE') ? (int)MAX_FILE_SIZE : 5 * 1024 * 1024;
+
+                $fileType = $_FILES['photo']['type'];
+                $fileSize = $_FILES['photo']['size'];
+
+                if (!in_array($fileType, $allowed_types)) {
+                    $error = 'Invalid file type uploaded.';
+                } elseif ($fileSize > $max_size) {
+                    $error = 'Uploaded file exceeds maximum allowed size.';
+                } else {
+                    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+                    $mime = finfo_file($finfo, $_FILES['photo']['tmp_name']);
+                    finfo_close($finfo);
+                    $extMap = [
+                        'image/jpeg' => 'jpg',
+                        'image/png' => 'png',
+                        'image/gif' => 'gif'
+                    ];
+                    $ext = isset($extMap[$mime]) ? $extMap[$mime] : pathinfo($_FILES['photo']['name'], PATHINFO_EXTENSION);
+                    $timestamp = time();
+                    $filename = $timestamp . '.' . $ext;
+                    $target = rtrim(UPLOAD_DIR, '/\\') . DIRECTORY_SEPARATOR . $filename;
+                    if (move_uploaded_file($_FILES['photo']['tmp_name'], $target)) {
+                        @chmod($target, 0644);
+                        // Optionally delete old photo file
+                        if (!empty($report['photo_path'])) {
+                            $old = rtrim(UPLOAD_DIR, '/\\') . DIRECTORY_SEPARATOR . $report['photo_path'];
+                            if (file_exists($old)) @unlink($old);
+                        }
+                        $photo_path = $filename;
+                    } else {
+                        $error = 'Failed to move uploaded file.';
+                    }
+                }
             }
         }
 
-        try {
-            executeQuery(
-                "INSERT INTO reports (user_id, title, description, category, location, latitude, longitude, status, photo_path, priority, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW())",
-                [
-                    $user['id'],
-                    $title,
-                    $description,
-                    $category,
-                    $location,
-                    $latitude,
-                    $longitude,
-                    $photo_path,
-                    $priority
-                ]
-            );
-                // Notify all authorities about the new report
-                try {
-                    $stmt = executeQuery("SELECT id, full_name, email FROM users WHERE role = 'authority' AND is_active = 1", []);
-                    $authorities = $stmt->fetchAll();
-                    foreach ($authorities as $auth) {
-                        $notifTitle = 'New report submitted';
-                        $notifBody = sprintf('A new report "%s" has been submitted by %s.', $title, $user['full_name']);
-                        createNotification($auth['id'], $notifTitle, $notifBody);
-                    }
-                } catch (Exception $e) {
-                    // Non-fatal: log but continue
-                    error_log('Failed to create notifications for authorities: ' . $e->getMessage());
-                }
-            // Redirect (prevents resubmission on refresh)
-            header("Location: report.php?success=1");
-            exit;
-        } catch (Exception $e) {
-            $error = 'Failed to submit report: ' . $e->getMessage();
+        if (empty($error)) {
+            try {
+                executeQuery(
+                    "UPDATE reports SET title = ?, description = ?, category = ?, location = ?, latitude = ?, longitude = ?, photo_path = ?, priority = ?, updated_at = NOW() WHERE id = ?",
+                    [$title, $description, $category, $location, $latitude, $longitude, $photo_path, $priority, $reportId]
+                );
+
+                        // Notify authorities that the report was edited
+                        try {
+                            $stmt = executeQuery("SELECT id, full_name FROM users WHERE role = 'authority' AND is_active = 1", []);
+                            $authorities = $stmt->fetchAll();
+                            foreach ($authorities as $auth) {
+                                $notifTitle = 'Report updated by reporter';
+                                $notifBody = sprintf('The report "%s" was edited by %s.', $title, $user['full_name']);
+                                createNotification($auth['id'], $notifTitle, $notifBody);
+                            }
+                        } catch (Exception $e) {
+                            error_log('Failed to notify authorities on edit: ' . $e->getMessage());
+                        }
+
+                header('Location: reports.php');
+                exit;
+            } catch (Exception $e) {
+                $error = 'Failed to update report: ' . $e->getMessage();
+            }
         }
     }
 }
-?>
 
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?php echo $page_title; ?></title>
-    <!-- <link rel="stylesheet" href="assets/css/style.css"> -->
+    <title>Edit Report - CivicVoice</title>
     <link rel="stylesheet" href="assets/css/dashboard.css">
     <link rel="stylesheet" href="assets/css/forms.css">
 </head>
@@ -181,10 +163,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <a href="dashboard.php" class="nav-link">Dashboard</a>
                     </li>
                     <li class="nav-item">
-                        <a href="report.php" class="nav-link active">Report Issue</a>
+                        <a href="report.php" class="nav-link">Report Issue</a>
                     </li>
                     <li class="nav-item">
-                        <a href="reports.php" class="nav-link">All reports</a>
+                        <a href="reports.php" class="nav-link active">All reports</a>
                     </li>
                 </ul>
                 <div class="nav-user">
@@ -210,12 +192,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <?php endif; ?>
                     </div>
                     <div class="user-menu">
-                            <span class="user-name"><?php echo htmlspecialchars(getUserDisplayName()); ?></span>
-                            <span class="user-role">(<?php echo ucfirst($user['role']); ?>)</span>
-                            <div class="user-dropdown">
-                                <a href="profile.php">Profile</a>
-                                <a href="logout.php">Logout</a>
-                            </div>
+                        <span class="user-name"><?php echo htmlspecialchars(getUserDisplayName()); ?></span>
+                        <span class="user-role">(<?php echo ucfirst($user['role']); ?>)</span>
+                        <div class="user-dropdown">
+                            <a href="profile.php">Profile</a>
+                            <a href="logout.php">Logout</a>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -225,20 +207,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <main class="form-main">
         <div class="form-container">
             <div class="form-header">
-                <h1>📍 Report a Community Issue</h1>
-                <p>Help improve your community by reporting issues that need attention</p>
+                <h1>✏️ Edit Your Report</h1>
+                <p>Update the details of your issue. Only pending reports can be edited.</p>
             </div>
 
             <?php if ($error): ?>
                 <div class="alert alert-error"><?php echo htmlspecialchars($error); ?></div>
-            <?php endif; ?>
-            
-            <?php if ($success): ?>
-                <div class="alert alert-success"><?php echo htmlspecialchars($success); ?></div>
-                <div class="success-actions">
-                    <a href="reports.php" class="btn btn-secondary">View All Reports</a>
-                    <a href="dashboard.php" class="btn btn-primary">Back to Dashboard</a>
-                </div>
             <?php endif; ?>
 
             <form method="POST" enctype="multipart/form-data" class="report-form" id="reportForm">
@@ -246,7 +220,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="form-group">
                     <label for="title">Issue Title *</label>
                     <input type="text" id="title" name="title" 
-                           value="<?php echo htmlspecialchars($title ?? ''); ?>" 
+                           value="<?php echo htmlspecialchars($_POST['title'] ?? $report['title']); ?>" 
                            required placeholder="Brief description of the issue"
                            maxlength="60">
                     <small class="form-help">Provide a clear, concise title for the issue</small>
@@ -258,19 +232,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <label for="category">Category *</label>
                     <select id="category" name="category" required>
                         <option value="">Select Issue Category</option>
-                        <option value="streetlight" <?php echo ($category ?? '') === 'streetlight' ? 'selected' : ''; ?>>
+                        <option value="streetlight" <?php echo (($_POST['category'] ?? $report['category']) === 'streetlight') ? 'selected' : ''; ?>>
                             💡 Streetlight Issues
                         </option>
-                        <option value="pothole" <?php echo ($category ?? '') === 'pothole' ? 'selected' : ''; ?>>
+                        <option value="pothole" <?php echo (($_POST['category'] ?? $report['category']) === 'pothole') ? 'selected' : ''; ?>>
                             🕳️ Road Potholes
                         </option>
-                        <option value="garbage" <?php echo ($category ?? '') === 'garbage' ? 'selected' : ''; ?>>
+                        <option value="garbage" <?php echo (($_POST['category'] ?? $report['category']) === 'garbage') ? 'selected' : ''; ?>>
                             🗑️ Garbage Collection
                         </option>
-                        <option value="traffic" <?php echo ($category ?? '') === 'traffic' ? 'selected' : ''; ?>>
+                        <option value="traffic" <?php echo (($_POST['category'] ?? $report['category']) === 'traffic') ? 'selected' : ''; ?>>
                             🚦 Traffic Signals
                         </option>
-                        <option value="other" <?php echo ($category ?? '') === 'other' ? 'selected' : ''; ?>>
+                        <option value="other" <?php echo (($_POST['category'] ?? $report['category']) === 'other') ? 'selected' : ''; ?>>
                             📍 Other Issues
                         </option>
                     </select>
@@ -280,13 +254,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="form-group">
                     <label for="priority">Priority Level *</label>
                     <select id="priority" name="priority" required>
-                        <option value="low" <?php echo ($priority ?? 'medium') === 'low' ? 'selected' : ''; ?>>
+                        <option value="low" <?php echo (($_POST['priority'] ?? $report['priority']) === 'low') ? 'selected' : ''; ?>>
                             🟢 Low - Non-urgent issue
                         </option>
-                        <option value="medium" <?php echo ($priority ?? 'medium') === 'medium' ? 'selected' : ''; ?>>
+                        <option value="medium" <?php echo (($_POST['priority'] ?? $report['priority']) === 'medium') ? 'selected' : ''; ?>>
                             🟡 Medium - Moderate concern
                         </option>
-                        <option value="high" <?php echo ($priority ?? 'medium') === 'high' ? 'selected' : ''; ?>>
+                        <option value="high" <?php echo (($_POST['priority'] ?? $report['priority']) === 'high') ? 'selected' : ''; ?>>
                             🔴 High - Safety hazard or urgent
                         </option>
                     </select>
@@ -296,7 +270,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="form-group">
                     <label for="description">Detailed Description *</label>
                     <textarea id="description" name="description" rows="5" required 
-                              placeholder="Provide detailed information about the issue, when you noticed it, and how it affects the community" maxlength="1000"><?php echo htmlspecialchars($description ?? ''); ?></textarea>
+                              placeholder="Provide detailed information about the issue, when you noticed it, and how it affects the community" maxlength="1000"><?php echo htmlspecialchars($_POST['description'] ?? $report['description']); ?></textarea>
                     <small class="form-help">Include as much detail as possible to help authorities understand and address the issue</small>
                     <div id="descriptionError" class="field-error" style="display:none;color:#e53e3e;margin-top:6px;font-size:0.95em;"></div>
                 </div>
@@ -306,15 +280,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <label for="location">Location *</label>
                     <div class="location-input-group">
                         <input type="text" id="location" name="location" 
-                               value="<?php echo htmlspecialchars($location ?? ''); ?>" 
+                               value="<?php echo htmlspecialchars($_POST['location'] ?? $report['location']); ?>" 
                                required placeholder="Enter the exact address or landmark"
                                maxlength="500">
                         <button type="button" id="getCurrentLocation" class="btn btn-secondary">
                             📍 Use Current Location
                         </button>
                     </div>
-                    <input type="hidden" id="latitude" name="latitude" value="<?php echo htmlspecialchars($latitude ?? ''); ?>">
-                    <input type="hidden" id="longitude" name="longitude" value="<?php echo htmlspecialchars($longitude ?? ''); ?>">
+                    <input type="hidden" id="latitude" name="latitude" value="<?php echo htmlspecialchars($_POST['latitude'] ?? $report['latitude']); ?>">
+                    <input type="hidden" id="longitude" name="longitude" value="<?php echo htmlspecialchars($_POST['longitude'] ?? $report['longitude']); ?>">
                     <div id="locationStatus" class="location-status"></div>
                 </div>
 
@@ -328,7 +302,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <span class="upload-hint">Max size: 5MB. Formats: JPG, PNG, GIF</span>
                         </div>
                     </div>
-                    <div id="imagePreview" class="image-preview"></div>
+                    <div id="imagePreview" class="image-preview">
+                        <?php if (!empty($report['photo_path'])): ?>
+                            <div class="preview-container">
+                                <img src="<?php echo htmlspecialchars(rtrim(UPLOAD_DIR, '/\\') . DIRECTORY_SEPARATOR . $report['photo_path']); ?>" alt="Current photo" class="preview-image">
+                                <button type="button" onclick="removeImage()" class="remove-image">✕</button>
+                            </div>
+                            <script>document.addEventListener('DOMContentLoaded', function(){ document.querySelector('.upload-text').textContent = '📸 <?php echo htmlspecialchars(basename($report['photo_path'])); ?>'; });</script>
+                        <?php endif; ?>
+                    </div>
                 </div>
 
                 <!-- Contact Information -->
@@ -354,13 +336,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <!-- Submit Button -->
                 <div class="form-actions">
                     <button type="submit" class="btn btn-primary btn-large">
-                        📝 Submit Report
+                        <span class="btn-emoji">💾</span> Save Changes
                     </button>
                     <button type="button" onclick="resetForm()" class="btn btn-secondary">
-                        🔄 Reset Form
+                        <span class="btn-emoji">🔄</span> Reset Form
                     </button>
-                    <a href="dashboard.php" class="btn btn-secondary">
-                        ← Back to Dashboard
+                    <a href="reports.php" class="btn btn-secondary">
+                        ← Back to Reports
                     </a>
                 </div>
             </form>
@@ -385,7 +367,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </main>
 
     <script>
-        // Form functionality
+        // Form functionality (copied from report.php)
         document.addEventListener('DOMContentLoaded', function() {
             initializeReportForm();
         });
@@ -532,7 +514,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Show loading state
                 const submitBtn = form.querySelector('button[type="submit"]');
                 submitBtn.disabled = true;
-                submitBtn.innerHTML = '⏳ Submitting Report...';
+                submitBtn.innerHTML = '⏳ Saving Changes...';
             });
         }
 
@@ -553,117 +535,111 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-            // Character counter for title and description
-            const titleMinLength = 10; // minimum title length (used in validation and helper)
-            const titleMaxLength = 60;
+        // Character counter for title and description
+        const titleMinLength = 10; // minimum title length (used in validation and helper)
+        const titleMaxLength = 60;
 
-            const titleEl = document.getElementById('title');
-            const titleHelp = titleEl.nextElementSibling;
+        const titleEl = document.getElementById('title');
+        const titleHelp = titleEl.nextElementSibling;
 
-            titleEl.addEventListener('input', function() {
-                const currentLength = this.value.length;
+        titleEl.addEventListener('input', function() {
+            const currentLength = this.value.length;
 
-                if (currentLength < titleMinLength) {
-                    titleHelp.textContent = `At least ${titleMinLength - currentLength} more characters needed`;
-                    titleHelp.style.color = '#e53e3e';
-                } else if (titleMaxLength - currentLength < 50) {
-                    const remaining = titleMaxLength - currentLength;
-                    titleHelp.textContent = `${remaining} characters remaining`;
-                    titleHelp.style.color = remaining < 20 ? '#e53e3e' : '#f56500';
-                } else {
-                    titleHelp.textContent = 'Provide a clear, concise title for the issue';
-                    titleHelp.style.color = '#666';
-                }
+            if (currentLength < titleMinLength) {
+                titleHelp.textContent = `At least ${titleMinLength - currentLength} more characters needed`;
+                titleHelp.style.color = '#e53e3e';
+            } else if (titleMaxLength - currentLength < 50) {
+                const remaining = titleMaxLength - currentLength;
+                titleHelp.textContent = `${remaining} characters remaining`;
+                titleHelp.style.color = remaining < 20 ? '#e53e3e' : '#f56500';
+            } else {
+                titleHelp.textContent = 'Provide a clear, concise title for the issue';
+                titleHelp.style.color = '#666';
+            }
+        });
+
+        const descriptionEl = document.getElementById('description');
+        const descriptionHelp = descriptionEl.nextElementSibling;
+        const descriptionMinLength = 20;
+        const descriptionMaxLength = 1000;
+
+        descriptionEl.addEventListener('input', function() {
+            const currentLength = this.value.length;
+
+            if (currentLength < descriptionMinLength) {
+                descriptionHelp.textContent = `At least ${descriptionMinLength - currentLength} more characters needed`;
+                descriptionHelp.style.color = '#e53e3e';
+            } else if (descriptionMaxLength - currentLength < 100) {
+                const remaining = descriptionMaxLength - currentLength;
+                descriptionHelp.textContent = `${remaining} characters remaining`;
+                descriptionHelp.style.color = remaining < 50 ? '#e53e3e' : '#f56500';
+            } else {
+                descriptionHelp.textContent = 'Include as much detail as possible to help authorities understand and address the issue';
+                descriptionHelp.style.color = '#666';
+            }
+        });
+    </script>
+    <script>
+        function closeAllDropdowns() {
+            const nd = document.getElementById('notifyDropdown');
+            if (nd) nd.style.display = 'none';
+            const um = document.querySelector('.user-menu');
+            if (um) um.classList.remove('open');
+        }
+
+        function toggleNotifications() {
+            const dd = document.getElementById('notifyDropdown');
+            if (!dd) return;
+            const isOpen = dd.style.display === 'flex';
+            closeAllDropdowns();
+            dd.style.display = isOpen ? 'none' : 'flex';
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const userMenu = document.querySelector('.user-menu');
+            if (userMenu) {
+                userMenu.addEventListener('click', function(e) {
+                    if (e.target.closest('.notification-area')) return;
+                    const dd = document.querySelector('.user-dropdown');
+                    if (!dd) return;
+                    const wasOpen = userMenu.classList.contains('open');
+                    closeAllDropdowns();
+                    if (!wasOpen) userMenu.classList.add('open');
+                });
+            }
+
+            // Close dropdowns when clicking outside or pressing Escape
+            document.addEventListener('click', function(e) {
+                if (e.target.closest('.notify-dropdown') || e.target.closest('.btn-notify')) return;
+                if (e.target.closest('.user-menu')) return;
+                closeAllDropdowns();
             });
 
-            const descriptionEl = document.getElementById('description');
-            const descriptionHelp = descriptionEl.nextElementSibling;
-            const descriptionMinLength = 20;
-            const descriptionMaxLength = 1000;
-
-            descriptionEl.addEventListener('input', function() {
-                const currentLength = this.value.length;
-
-                if (currentLength < descriptionMinLength) {
-                    descriptionHelp.textContent = `At least ${descriptionMinLength - currentLength} more characters needed`;
-                    descriptionHelp.style.color = '#e53e3e';
-                } else if (descriptionMaxLength - currentLength < 100) {
-                    const remaining = descriptionMaxLength - currentLength;
-                    descriptionHelp.textContent = `${remaining} characters remaining`;
-                    descriptionHelp.style.color = remaining < 50 ? '#e53e3e' : '#f56500';
-                } else {
-                    descriptionHelp.textContent = 'Include as much detail as possible to help authorities understand and address the issue';
-                    descriptionHelp.style.color = '#666';
-                }
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') closeAllDropdowns();
             });
+
+            // Mark notification as read when clicked (only when clicking a .notify-item)
+            document.addEventListener('click', function(e) {
+                const item = e.target.closest('.notify-item');
+                if (!item) return;
+                const id = item.getAttribute('data-id');
+                if (!id) return;
+                fetch('mark_notification.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: `id=${encodeURIComponent(id)}`
+                }).then(() => {
+                    item.style.opacity = '0.6';
+                    const badge = document.querySelector('.notify-count');
+                    if (badge) {
+                        const current = parseInt(badge.textContent || '0', 10);
+                        if (current > 1) badge.textContent = current - 1;
+                        else badge.remove();
+                    }
+                }).catch(() => {});
+            });
+        });
     </script>
 </body>
 </html>
-
-<script>
-    function closeAllDropdowns() {
-        // close notification dropdown
-        const nd = document.getElementById('notifyDropdown');
-        if (nd) nd.style.display = 'none';
-        // close user menu
-        const um = document.querySelector('.user-menu');
-        if (um) um.classList.remove('open');
-    }
-
-    function toggleNotifications() {
-        const dd = document.getElementById('notifyDropdown');
-        if (!dd) return;
-        const isOpen = dd.style.display === 'flex';
-        // Close other dropdowns first
-        closeAllDropdowns();
-        dd.style.display = isOpen ? 'none' : 'flex';
-    }
-
-    // Toggle user menu when clicked (mobile-friendly)
-    document.addEventListener('DOMContentLoaded', function() {
-        const userMenu = document.querySelector('.user-menu');
-        if (userMenu) {
-            userMenu.addEventListener('click', function(e) {
-                // if clicking inside notification-area, ignore
-                if (e.target.closest('.notification-area')) return;
-                const dd = document.querySelector('.user-dropdown');
-                if (!dd) return;
-                const wasOpen = userMenu.classList.contains('open');
-                closeAllDropdowns();
-                if (!wasOpen) userMenu.classList.add('open');
-            });
-        }
-    });
-    // Close dropdowns when clicking outside or pressing Escape
-    document.addEventListener('click', function(e) {
-        // If click inside notification dropdown or the bell, ignore (handled elsewhere)
-        if (e.target.closest('.notify-dropdown') || e.target.closest('.btn-notify')) return;
-        if (e.target.closest('.user-menu')) return; // user menu click handled
-        closeAllDropdowns();
-    });
-
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') closeAllDropdowns();
-    });
-
-    // Mark notification as read when clicked (only when clicking a .notify-item)
-    document.addEventListener('click', function(e) {
-        const item = e.target.closest('.notify-item');
-        if (!item) return;
-        const id = item.getAttribute('data-id');
-        if (!id) return;
-        fetch('mark_notification.php', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-            body: `id=${encodeURIComponent(id)}`
-        }).then(() => {
-            item.style.opacity = '0.6';
-            const badge = document.querySelector('.notify-count');
-            if (badge) {
-                const current = parseInt(badge.textContent || '0', 10);
-                if (current > 1) badge.textContent = current - 1;
-                else badge.remove();
-            }
-        }).catch(() => {});
-    });
-</script>

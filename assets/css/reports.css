@@ -192,6 +192,11 @@ body {
     color: #155724;
 }
 
+.status-rejected {
+    background: #f8d7da; /* light red */
+    color: #721c24; /* dark red */
+}
+
 .priority-badge {
     padding: 0.25rem 0.75rem;
     border-radius: 20px;
@@ -212,6 +217,18 @@ body {
 .priority-high {
     background: #f8d7da;
     color: #721c24;
+}
+
+/* Edited badge styling */
+.edited-badge {
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px; /* match other badges */
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: #0ea5a4; /* teal-500 */
+    background: rgba(14,165,164,0.06);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
 .report-description {

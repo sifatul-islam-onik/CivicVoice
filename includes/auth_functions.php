@@ -206,6 +206,45 @@ function getUserAvatar($userId = null) {
     return 'assets/images/default-avatar.png';
 }
 
+/**
+ * Notifications helper functions
+ */
+function createNotification($userId, $title, $body = null) {
+    try {
+        executeQuery(
+            "INSERT INTO notifications (user_id, title, body) VALUES (?, ?, ?)",
+            [$userId, $title, $body]
+        );
+        return true;
+    } catch (Exception $e) {
+        error_log("Failed to create notification: " . $e->getMessage());
+        return false;
+    }
+}
+
+function getUnreadNotifications($userId, $limit = 10) {
+    try {
+        // Some MySQL/PDO setups don't allow binding LIMIT as a parameter; interpolate safely
+        $limitInt = (int)$limit;
+        $sql = "SELECT id, title, body, created_at FROM notifications WHERE user_id = ? AND is_read = 0 ORDER BY created_at DESC LIMIT " . $limitInt;
+        $stmt = executeQuery($sql, [$userId]);
+        return $stmt->fetchAll();
+    } catch (Exception $e) {
+        error_log("Failed to fetch notifications: " . $e->getMessage());
+        return [];
+    }
+}
+
+function markNotificationRead($notificationId) {
+    try {
+        executeQuery("UPDATE notifications SET is_read = 1 WHERE id = ?", [$notificationId]);
+        return true;
+    } catch (Exception $e) {
+        error_log("Failed to mark notification read: " . $e->getMessage());
+        return false;
+    }
+}
+
 checkAndRestoreSession();
 
 function generatePasswordResetOTP($userId, $email) {

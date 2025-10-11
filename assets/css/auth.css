@@ -136,6 +136,15 @@ body{
     transition: all 0.3s ease;
     line-height: 1.5;
 }
+
+/* Ensure emoji/icons inside buttons match the button font-size and align properly */
+.btn .btn-emoji,
+.btn .emoji {
+    display: inline-block;
+    font-size: 1em; /* match surrounding text */
+    line-height: 1; /* keep square alignment */
+    vertical-align: -0.08em; /* minor vertical tweak for better visual alignment across platforms */
+}
 .btn-primary {
     background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
     color: white;

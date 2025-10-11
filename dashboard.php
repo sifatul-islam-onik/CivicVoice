@@ -61,8 +61,27 @@ if (hasRole('admin') && $_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($hasUpdates > 0) {
                         $error = "Cannot delete authority account with existing report updates. Deactivate instead.";
                     } else {
-                        executeQuery("DELETE FROM users WHERE id = ? AND role = 'authority'", [$userId]);
-                        $success = "Authority account deleted successfully!";
+                            try {
+                                // Delete associated report photos for this authority (if any)
+                                $stmtPhotos = executeQuery("SELECT photo_path FROM reports WHERE user_id = ? AND photo_path IS NOT NULL", [$userId]);
+                                $photos = $stmtPhotos->fetchAll();
+                                foreach ($photos as $p) {
+                                    if (!empty($p['photo_path']) && defined('UPLOAD_DIR') && UPLOAD_DIR) {
+                                        $safe = basename($p['photo_path']);
+                                        $path = rtrim(UPLOAD_DIR, '/\\') . DIRECTORY_SEPARATOR . $safe;
+                                        if (file_exists($path) && is_file($path)) @unlink($path);
+                                    }
+                                }
+
+                                // Delete avatar if exists
+                                $avatarPath = __DIR__ . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'avatars' . DIRECTORY_SEPARATOR . $userId . '.jpg';
+                                if (file_exists($avatarPath) && is_file($avatarPath)) @unlink($avatarPath);
+
+                                executeQuery("DELETE FROM users WHERE id = ? AND role = 'authority'", [$userId]);
+                                $success = "Authority account deleted successfully!";
+                            } catch (Exception $e) {
+                                $error = "Failed to delete authority account.";
+                            }
                     }
                 } catch (Exception $e) {
                     $error = "Failed to delete authority account.";
@@ -79,12 +98,14 @@ if (hasRole('citizen')) {
     $pending = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ? AND status = 'pending'", [$user['id']])->fetchColumn();
     $inProgress = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ? AND status = 'in-progress'", [$user['id']])->fetchColumn();
     $fixed = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ? AND status = 'fixed'", [$user['id']])->fetchColumn();
+    $rejected = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ? AND status = 'rejected'", [$user['id']])->fetchColumn();
 } elseif (hasRole('authority')) {
     // Authority stats
     $totalReports = executeQuery("SELECT COUNT(*) FROM reports")->fetchColumn();
     $pending = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'pending'")->fetchColumn();
     $inProgress = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'in-progress'")->fetchColumn();
     $resolvedToday = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed' AND DATE(updated_at) = CURDATE()")->fetchColumn();
+    $rejectedCount = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'rejected'")->fetchColumn();
 } elseif (hasRole('admin')) {
     // Admin stats - comprehensive system analytics
     $totalUsers = executeQuery("SELECT COUNT(*) FROM users")->fetchColumn();
@@ -186,6 +207,27 @@ if (!hasRole('admin')) {
                     <?php endif; ?> -->
                 </ul>
                 <div class="nav-user">
+                    <div class="notification-area">
+                        <?php if (isLoggedIn()): ?>
+                            <?php $unreads = getUnreadNotifications($user['id'], 4); ?>
+                            <button class="btn btn-small btn-notify" onclick="toggleNotifications()">🔔 <?php echo count($unreads) ? '<span class="notify-count">'.count($unreads).'</span>' : ''; ?></button>
+                            <div id="notifyDropdown" class="notify-dropdown" style="display:none;">
+                                <button class="notify-close" aria-label="Close notifications" onclick="closeAllDropdowns()">✕</button>
+                                <?php if (empty($unreads)): ?>
+                                    <div class="notify-item">No new notifications</div>
+                                <?php else: ?>
+                                    <?php foreach ($unreads as $n): ?>
+                                        <div class="notify-item" data-id="<?php echo $n['id']; ?>">
+                                            <strong><?php echo htmlspecialchars($n['title']); ?></strong>
+                                            <div class="notify-body"><?php echo htmlspecialchars($n['body']); ?></div>
+                                            <div class="notify-time"><?php echo date('M j, Y g:i A', strtotime($n['created_at'])); ?></div>
+                                        </div>
+                                    <?php endforeach; ?>
+                                <?php endif; ?>
+                                <div class="notify-actions"><a href="notifications.php">View all</a></div>
+                            </div>
+                        <?php endif; ?>
+                    </div>
                     <div class="user-menu">
                         <span class="user-name"><?php echo htmlspecialchars(getUserDisplayName()); ?></span>
                         <span class="user-role">(<?php echo ucfirst($user['role']); ?>)</span>
@@ -224,6 +266,10 @@ if (!hasRole('admin')) {
                     <div class="stat-card">
                         <h3>Fixed</h3>
                         <span class="stat-number"><?php echo $fixed; ?></span>
+                    </div>
+                    <div class="stat-card">
+                        <h3>Rejected</h3>
+                        <span class="stat-number rejected"><?php echo $rejected ?? 0; ?></span>
                     </div>
                 </div>
 
@@ -570,6 +616,10 @@ if (!hasRole('admin')) {
                                 <?php if (hasAnyRole(['authority'])): ?>
                                     <button class="btn btn-small btn-primary" onclick="updateStatus(<?php echo $report['id']; ?>)">Update Status</button>
                                 <?php endif; ?>
+                                <?php if (hasRole('citizen') && isset(
+                                    $user['id']) && $report['user_id'] == $user['id'] && $report['status'] === 'pending'): ?>
+                                    <a class="btn btn-small btn-secondary" href="edit_report.php?id=<?php echo $report['id']; ?>">✏️ Edit</a>
+                                <?php endif; ?>
                             </div>
                         </div>
                     <?php endforeach; ?>
@@ -664,8 +714,9 @@ if (!hasRole('admin')) {
 
         <?php if (hasRole('authority')): ?>
         function updateStatus(reportId) {
-            const newStatus = prompt('Enter new status (pending, in-progress, fixed):');
-            if (newStatus && ['pending', 'in-progress', 'fixed'].includes(newStatus)) {
+            const newStatus = prompt('Enter new status (pending, in-progress, fixed, rejected):');
+            const allowed = ['pending', 'in-progress', 'fixed', 'rejected'];
+            if (newStatus && allowed.includes(newStatus)) {
                 fetch('reports.php', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -684,7 +735,7 @@ if (!hasRole('admin')) {
                     alert('Error updating status.');
                 });
             } else if (newStatus) {
-                alert('Invalid status. Please use: pending, in-progress, or fixed');
+                alert('Invalid status. Please use: pending, in-progress, fixed, or rejected');
             }
         }
 
@@ -782,6 +833,68 @@ if (!hasRole('admin')) {
                         alert.style.display = 'none';
                     }, 300);
                 }, 5000);
+            });
+        });
+
+        // Notification dropdown toggle & mutual exclusion with user menu
+        function closeAllDropdowns() {
+            const nd = document.getElementById('notifyDropdown');
+            if (nd) nd.style.display = 'none';
+            const um = document.querySelector('.user-menu');
+            if (um) um.classList.remove('open');
+        }
+
+        function toggleNotifications() {
+            const dd = document.getElementById('notifyDropdown');
+            if (!dd) return;
+            const isOpen = dd.style.display === 'flex';
+            closeAllDropdowns();
+            dd.style.display = isOpen ? 'none' : 'flex';
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const userMenu = document.querySelector('.user-menu');
+            if (userMenu) {
+                userMenu.addEventListener('click', function(e) {
+                    if (e.target.closest('.notification-area')) return;
+                    const dd = document.querySelector('.user-dropdown');
+                    if (!dd) return;
+                    const wasOpen = userMenu.classList.contains('open');
+                    closeAllDropdowns();
+                    if (!wasOpen) userMenu.classList.add('open');
+                });
+            }
+
+            // Close dropdowns when clicking outside or pressing Escape
+            document.addEventListener('click', function(e) {
+                if (e.target.closest('.notify-dropdown') || e.target.closest('.btn-notify')) return;
+                if (e.target.closest('.user-menu')) return;
+                closeAllDropdowns();
+            });
+
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') closeAllDropdowns();
+            });
+
+            // Mark notification as read when clicked (only when clicking a .notify-item)
+            document.addEventListener('click', function(e) {
+                const item = e.target.closest('.notify-item');
+                if (!item) return;
+                const id = item.getAttribute('data-id');
+                if (!id) return;
+                fetch('mark_notification.php', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: `id=${encodeURIComponent(id)}`
+                }).then(() => {
+                    item.style.opacity = '0.6';
+                    const badge = document.querySelector('.notify-count');
+                    if (badge) {
+                        const current = parseInt(badge.textContent || '0', 10);
+                        if (current > 1) badge.textContent = current - 1;
+                        else badge.remove();
+                    }
+                }).catch(() => {});
             });
         });
     </script>

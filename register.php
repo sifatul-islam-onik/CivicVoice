@@ -44,6 +44,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             // Clear form data
             $full_name = $email = $phone = '';
+            
+            // Notify authorities about the new user registration
+            try {
+                $stmtAuth = executeQuery("SELECT id, full_name, email FROM users WHERE role = 'authority' AND is_active = 1", []);
+                $authorities = $stmtAuth->fetchAll();
+                foreach ($authorities as $auth) {
+                    $notifTitle = 'New user registered';
+                    $notifBody = sprintf('A new user "%s" has registered.', $full_name ?: $email);
+                    createNotification($auth['id'], $notifTitle, $notifBody);
+                }
+            } catch (Exception $e) {
+                error_log('Failed to notify authorities on registration: ' . $e->getMessage());
+            }
         } catch (Exception $e) {
             $error = 'Registration failed. Please try again.';
             error_log("Registration error: " . $e->getMessage());
