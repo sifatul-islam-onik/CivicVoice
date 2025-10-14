@@ -5,6 +5,9 @@ if (session_status() === PHP_SESSION_NONE) {
 
 $env = parse_ini_file(__DIR__ . '/.env');
 
+// Include the new class structure
+require_once __DIR__ . '/classes/CivicVoiceService.php';
+
 // Database config
 define('DB_HOST', $env['DB_HOST']);
 define('DB_USERNAME', $env['DB_USERNAME']);
@@ -49,6 +52,9 @@ try {
     die("Database connection failed. Please try again later.");
 }
 
+// Initialize the main CivicVoice service
+$civicVoiceService = new CivicVoiceService($pdo);
+
 // Function to get database connection
 function getDbConnection() {
     global $pdo;
@@ -66,6 +72,15 @@ function executeQuery($query, $params = []) {
         throw new Exception($e->getMessage());
     }
 }
+
+// ============= BACKWARD COMPATIBILITY FUNCTIONS =============
+// Note: Core auth functions (isLoggedIn, hasRole, etc.) are defined in auth_functions.php
+
+// getUserDisplayName function is defined in auth_functions.php
+
+// getUnreadNotifications function is defined in auth_functions.php
+
+// createNotification function is defined in auth_functions.php
 
 // Function to generate username from full name
 function generateUsername($fullName) {
@@ -91,22 +106,24 @@ function generateUsername($fullName) {
     return $username;
 }
 
-// Function to check if username exists
+// Function to check if username exists (now using repository)
 function usernameExists($username) {
+    global $civicVoiceService;
     try {
-        $stmt = executeQuery("SELECT id FROM users WHERE username = ?", [$username]);
-        return $stmt->rowCount() > 0;
+        return $civicVoiceService->getUserRepository()->usernameExists($username);
     } catch (Exception $e) {
+        error_log('Error checking username existence: ' . $e->getMessage());
         return false;
     }
 }
 
-// Function to check if email exists
+// Function to check if email exists (now using repository)
 function emailExists($email) {
+    global $civicVoiceService;
     try {
-        $stmt = executeQuery("SELECT id FROM users WHERE email = ?", [$email]);
-        return $stmt->rowCount() > 0;
+        return $civicVoiceService->getUserRepository()->emailExists($email);
     } catch (Exception $e) {
+        error_log('Error checking email existence: ' . $e->getMessage());
         return false;
     }
 }

@@ -12,9 +12,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $phone = trim($_POST['phone'] ?? '');
     $password = $_POST['password'] ?? '';
     $confirm_password = $_POST['confirm_password'] ?? '';
-    $role = 'citizen'; // Fixed role for public registration
     
-    // Validation
+    // Basic validation
     if (empty($full_name) || empty($email) || empty($password)) {
         $error = 'All required fields must be filled.';
     } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -23,39 +22,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'Password must be at least ' . PASSWORD_MIN_LENGTH . ' characters long.';
     } elseif ($password !== $confirm_password) {
         $error = 'Passwords do not match.';
-    } elseif (emailExists($email)) {
-        $error = 'Email already exists. Please use a different email.';
     } else {
-        // Generate username from full name
-        $username = generateUsername($full_name);
-        
-        // Hash password
-        $password_hash = password_hash($password, PASSWORD_BCRYPT, ['cost' => BCRYPT_COST]);
-        
         try {
-            // Insert user into database
-            $stmt = executeQuery(
-                "INSERT INTO users (username, email, password_hash, full_name, phone, role) VALUES (?, ?, ?, ?, ?, ?)",
-                [$username, $email, $password_hash, $full_name, $phone, $role]
-            );
+            // Generate username from full name
+            $username = generateUsername($full_name);
             
-                        $success = 'Registration successful! You can now log in with your credentials.';
-            $username = $email = $full_name = '';
+            // Use AuthService for registration
+            $userData = [
+                'username' => $username,
+                'full_name' => $full_name,
+                'email' => $email,
+                'phone' => $phone,
+                'password' => $password,
+                'role' => User::ROLE_CITIZEN // Default role for public registration
+            ];
             
-            // Clear form data
-            $full_name = $email = $phone = '';
+            $result = $civicVoiceService->getAuthService()->register($userData);
             
-            // Notify authorities about the new user registration
-            try {
-                $stmtAuth = executeQuery("SELECT id, full_name, email FROM users WHERE role = 'authority' AND is_active = 1", []);
-                $authorities = $stmtAuth->fetchAll();
-                foreach ($authorities as $auth) {
-                    $notifTitle = 'New user registered';
-                    $notifBody = sprintf('A new user "%s" has registered.', $full_name ?: $email);
-                    createNotification($auth['id'], $notifTitle, $notifBody);
+            if ($result['success']) {
+                $success = 'Registration successful! You can now log in with your credentials.';
+                
+                // Clear form data
+                $full_name = $email = $phone = '';
+                
+                // Notify authorities about the new user registration
+                try {
+                    $authorities = $civicVoiceService->getUserRepository()->findByRole(User::ROLE_AUTHORITY);
+                    foreach ($authorities as $auth) {
+                        $civicVoiceService->createNotification(
+                            $auth->getId(),
+                            'New user registered',
+                            sprintf('A new user "%s" has registered.', $userData['full_name'] ?: $userData['email'])
+                        );
+                    }
+                } catch (Exception $e) {
+                    error_log('Failed to notify authorities on registration: ' . $e->getMessage());
                 }
-            } catch (Exception $e) {
-                error_log('Failed to notify authorities on registration: ' . $e->getMessage());
+            } else {
+                $error = $result['message'];
             }
         } catch (Exception $e) {
             $error = 'Registration failed. Please try again.';

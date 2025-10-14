@@ -21,17 +21,24 @@ if (hasRole('admin') && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 if (!empty($username) && !empty($email) && !empty($full_name) && !empty($password)) {
                     try {
-                        // Check if username or email already exists
-                        $checkStmt = executeQuery("SELECT id FROM users WHERE username = ? OR email = ?", [$username, $email]);
-                        if ($checkStmt->fetch()) {
-                            $error = "Username or email already exists.";
-                        } else {
-                            $passwordHash = password_hash($password, PASSWORD_DEFAULT, ['cost' => BCRYPT_COST]);
-                            executeQuery(
-                                "INSERT INTO users (username, email, password_hash, full_name, phone, role, is_active, email_verified) VALUES (?, ?, ?, ?, ?, 'authority', 1, 1)",
-                                [$username, $email, $passwordHash, $full_name, $phone]
-                            );
+                        // Use AuthService to create authority account
+                        $userData = [
+                            'username' => $username,
+                            'email' => $email,
+                            'full_name' => $full_name,
+                            'phone' => $phone,
+                            'password' => $password,
+                            'role' => User::ROLE_AUTHORITY,
+                            'is_active' => true,
+                            'email_verified' => true
+                        ];
+                        
+                        $result = $civicVoiceService->getAuthService()->register($userData);
+                        
+                        if ($result['success']) {
                             $success = "Authority account created successfully!";
+                        } else {
+                            $error = $result['message'];
                         }
                     } catch (Exception $e) {
                         $error = "Failed to create authority account.";
@@ -41,11 +48,18 @@ if (hasRole('admin') && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 
             case 'toggle_authority_status':
                 $userId = (int)$_POST['user_id'];
-                $newStatus = $_POST['status'] === 'active' ? 1 : 0;
+                $newStatus = $_POST['status'] === 'active';
                 
                 try {
-                    executeQuery("UPDATE users SET is_active = ? WHERE id = ? AND role = 'authority'", [$newStatus, $userId]);
-                    $success = "Authority status updated successfully!";
+                    // Use UserRepository to update status
+                    $user = $civicVoiceService->getUserRepository()->findById($userId);
+                    if ($user && $user->getRole() === User::ROLE_AUTHORITY) {
+                        $user->setActive($newStatus);
+                        $civicVoiceService->getUserRepository()->save($user);
+                        $success = "Authority status updated successfully!";
+                    } else {
+                        $error = "Authority not found.";
+                    }
                 } catch (Exception $e) {
                     $error = "Failed to update authority status.";
                 }
@@ -55,19 +69,23 @@ if (hasRole('admin') && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 $userId = (int)$_POST['user_id'];
                 
                 try {
-                    // First check if this authority has any report updates
+                    // Check if this authority has any report updates using StatusUpdateRepository
                     $hasUpdates = executeQuery("SELECT COUNT(*) FROM status_updates WHERE updated_by_user_id = ?", [$userId])->fetchColumn();
                     
                     if ($hasUpdates > 0) {
                         $error = "Cannot delete authority account with existing report updates. Deactivate instead.";
                     } else {
+                        // Get user and verify it's an authority
+                        $user = $civicVoiceService->getUserRepository()->findById($userId);
+                        if (!$user || $user->getRole() !== User::ROLE_AUTHORITY) {
+                            $error = "Authority not found.";
+                        } else {
                             try {
-                                // Delete associated report photos for this authority (if any)
-                                $stmtPhotos = executeQuery("SELECT photo_path FROM reports WHERE user_id = ? AND photo_path IS NOT NULL", [$userId]);
-                                $photos = $stmtPhotos->fetchAll();
-                                foreach ($photos as $p) {
-                                    if (!empty($p['photo_path']) && defined('UPLOAD_DIR') && UPLOAD_DIR) {
-                                        $safe = basename($p['photo_path']);
+                                // Delete associated report photos using ReportRepository
+                                $userReports = $civicVoiceService->getReportRepository()->findByUserId($userId);
+                                foreach ($userReports as $report) {
+                                    if ($report->getPhotoPath()) {
+                                        $safe = basename($report->getPhotoPath());
                                         $path = rtrim(UPLOAD_DIR, '/\\') . DIRECTORY_SEPARATOR . $safe;
                                         if (file_exists($path) && is_file($path)) @unlink($path);
                                     }
@@ -77,11 +95,13 @@ if (hasRole('admin') && $_SERVER['REQUEST_METHOD'] === 'POST') {
                                 $avatarPath = __DIR__ . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'avatars' . DIRECTORY_SEPARATOR . $userId . '.jpg';
                                 if (file_exists($avatarPath) && is_file($avatarPath)) @unlink($avatarPath);
 
-                                executeQuery("DELETE FROM users WHERE id = ? AND role = 'authority'", [$userId]);
+                                // Use UserRepository to delete the user
+                                $civicVoiceService->getUserRepository()->delete($user);
                                 $success = "Authority account deleted successfully!";
                             } catch (Exception $e) {
                                 $error = "Failed to delete authority account.";
                             }
+                        }
                     }
                 } catch (Exception $e) {
                     $error = "Failed to delete authority account.";
@@ -91,29 +111,40 @@ if (hasRole('admin') && $_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// Fetch stats from the database
+// Fetch stats using the new repository classes
+$reportRepo = $civicVoiceService->getReportRepository();
+$userRepo = $civicVoiceService->getUserRepository();
+
 if (hasRole('citizen')) {
-    // Citizen stats
-    $myReports = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ?", [$user['id']])->fetchColumn();
-    $pending = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ? AND status = 'pending'", [$user['id']])->fetchColumn();
-    $inProgress = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ? AND status = 'in-progress'", [$user['id']])->fetchColumn();
-    $fixed = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ? AND status = 'fixed'", [$user['id']])->fetchColumn();
-    $rejected = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ? AND status = 'rejected'", [$user['id']])->fetchColumn();
+    // Citizen stats using countSearch method
+    $myReports = $reportRepo->countSearch(['user_id' => $user['id']]);
+    $pending = $reportRepo->countSearch(['user_id' => $user['id'], 'status' => Report::STATUS_PENDING]);
+    $inProgress = $reportRepo->countSearch(['user_id' => $user['id'], 'status' => Report::STATUS_IN_PROGRESS]);
+    $fixed = $reportRepo->countSearch(['user_id' => $user['id'], 'status' => Report::STATUS_FIXED]);
+    $rejected = $reportRepo->countSearch(['user_id' => $user['id'], 'status' => Report::STATUS_REJECTED]);
 } elseif (hasRole('authority')) {
-    // Authority stats
-    $totalReports = executeQuery("SELECT COUNT(*) FROM reports")->fetchColumn();
-    $pending = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'pending'")->fetchColumn();
-    $inProgress = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'in-progress'")->fetchColumn();
+    // Authority stats using statistics method and countSearch
+    $reportStats = $reportRepo->getStatistics();
+    $totalReports = $reportStats['total_reports'];
+    $pending = $reportStats['by_status'][Report::STATUS_PENDING] ?? 0;
+    $inProgress = $reportStats['by_status'][Report::STATUS_IN_PROGRESS] ?? 0;
+    $rejectedCount = $reportStats['by_status'][Report::STATUS_REJECTED] ?? 0;
+    
+    // Resolved today - use executeQuery for date-specific query
     $resolvedToday = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed' AND DATE(updated_at) = CURDATE()")->fetchColumn();
-    $rejectedCount = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'rejected'")->fetchColumn();
 } elseif (hasRole('admin')) {
     // Admin stats - comprehensive system analytics
-    $totalUsers = executeQuery("SELECT COUNT(*) FROM users")->fetchColumn();
-    $totalAuthorities = executeQuery("SELECT COUNT(*) FROM users WHERE role = 'authority'")->fetchColumn();
+    $userStats = $userRepo->getStatistics();
+    $reportStats = $reportRepo->getStatistics();
+    
+    $totalUsers = $userStats['total_users'];
+    $totalAuthorities = $userStats['by_role'][User::ROLE_AUTHORITY] ?? 0;
+    $totalCitizens = $userStats['by_role'][User::ROLE_CITIZEN] ?? 0;
+    $totalReports = $reportStats['total_reports'];
+    $activeIssues = $reportStats['active_reports'];
+    
+    // Use executeQuery for complex date-based and calculation queries
     $activeAuthorities = executeQuery("SELECT COUNT(*) FROM users WHERE role = 'authority' AND is_active = 1")->fetchColumn();
-    $totalCitizens = executeQuery("SELECT COUNT(*) FROM users WHERE role = 'citizen'")->fetchColumn();
-    $totalReports = executeQuery("SELECT COUNT(*) FROM reports")->fetchColumn();
-    $activeIssues = executeQuery("SELECT COUNT(*) FROM reports WHERE status IN ('pending', 'in-progress')")->fetchColumn();
     $resolvedThisMonth = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed' AND MONTH(updated_at) = MONTH(CURRENT_DATE())")->fetchColumn();
     $avgResolutionTime = executeQuery("SELECT ROUND(AVG(DATEDIFF(updated_at, created_at)), 1) FROM reports WHERE status = 'fixed'")->fetchColumn() ?: 0;
     

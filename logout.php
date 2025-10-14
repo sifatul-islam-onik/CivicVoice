@@ -4,8 +4,9 @@ require_once 'includes/auth_functions.php';
 
 // Require login to logout
 requireLogin();
-// Process logout
-logout();
+
+// Process logout using AuthService
+$civicVoiceService->getAuthService()->logout();
 
 // Redirect to login page with success message
 header("Location: login.php?logged_out=1");

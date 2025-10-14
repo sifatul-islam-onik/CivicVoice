@@ -27,37 +27,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'Please enter both username/email and password.';
     } else {
         try {
-            // Check if login is email or username
-            $field = filter_var($login, FILTER_VALIDATE_EMAIL) ? 'email' : 'username';
+            // Use AuthService for login
+            $authResult = $civicVoiceService->getAuthService()->authenticate($login, $password, $remember_me);
             
-            $stmt = executeQuery(
-                "SELECT id, username, email, password_hash, full_name, role, is_active FROM users WHERE $field = ? AND is_active = 1",
-                [$login]
-            );
-            
-            $user = $stmt->fetch();
-            
-            if ($user) {
-                // User found, now verify password
-                if (password_verify($password, $user['password_hash'])) {
-                    // Login successful
-                    createUserSession($user['id'], $remember_me);
-                    
-                    // Set session variables
-                    $_SESSION['user_id'] = $user['id'];
-                    $_SESSION['username'] = $user['username'];
-                    $_SESSION['full_name'] = $user['full_name'];
-                    $_SESSION['email'] = $user['email'];
-                    $_SESSION['role'] = $user['role'];
-                    $_SESSION['logged_in'] = true;
-                    
-                    // Redirect based on role
-                    redirectToDashboard();
-                } else {
-                    $error = 'Invalid username/email or password.';
-                }
+            if ($authResult['success']) {
+                // Login successful - redirect based on role
+                redirectToDashboard();
             } else {
-                $error = 'Invalid username/email or password.';
+                $error = $authResult['message'];
             }
         } catch (Exception $e) {
             $error = 'Login failed. Please try again.';
