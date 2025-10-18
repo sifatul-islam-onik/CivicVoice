@@ -20,29 +20,50 @@ if (hasRole('admin') && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 $password = $_POST['password'];
                 
                 if (!empty($username) && !empty($email) && !empty($full_name) && !empty($password)) {
-                    try {
-                        // Use AuthService to create authority account
-                        $userData = [
-                            'username' => $username,
-                            'email' => $email,
-                            'full_name' => $full_name,
-                            'phone' => $phone,
-                            'password' => $password,
-                            'role' => User::ROLE_AUTHORITY,
-                            'is_active' => true,
-                            'email_verified' => true
-                        ];
-                        
-                        $result = $civicVoiceService->getAuthService()->register($userData);
-                        
-                        if ($result['success']) {
-                            $success = "Authority account created successfully!";
-                        } else {
-                            $error = $result['message'];
+                        try {
+                            // Preserve current admin session (legacy session keys) so admin stays logged in
+                            $legacySessionKeys = [
+                                'user_id','username','full_name','email','role','logged_in'
+                            ];
+                            $savedLegacy = [];
+                            foreach ($legacySessionKeys as $k) {
+                                if (isset($_SESSION[$k])) $savedLegacy[$k] = $_SESSION[$k];
+                            }
+
+                            // Use AuthService to create authority account
+                            $userData = [
+                                'username' => $username,
+                                'email' => $email,
+                                'full_name' => $full_name,
+                                'phone' => $phone,
+                                'password' => $password,
+                                'role' => User::ROLE_AUTHORITY,
+                                'is_active' => true,
+                                'email_verified' => true
+                            ];
+
+                            $result = $civicVoiceService->getAuthService()->register($userData);
+
+                            // Restore admin legacy session values so admin remains logged in
+                            foreach ($savedLegacy as $k => $v) {
+                                $_SESSION[$k] = $v;
+                            }
+
+                            // Remove any new session wrapper set by AuthService (avoid switching context)
+                            if (isset($_SESSION['civicvoice_user'])) {
+                                unset($_SESSION['civicvoice_user']);
+                            }
+
+                            if ($result['success']) {
+                                // Redirect after successful creation to avoid mixed rendering and PRG
+                                header('Location: dashboard.php?authority_created=1');
+                                exit;
+                            } else {
+                                $error = $result['message'];
+                            }
+                        } catch (Exception $e) {
+                            $error = "Failed to create authority account.";
                         }
-                    } catch (Exception $e) {
-                        $error = "Failed to create authority account.";
-                    }
                 }
                 break;
                 
@@ -53,13 +74,45 @@ if (hasRole('admin') && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 try {
                     // Use UserRepository to update status
                     $user = $civicVoiceService->getUserRepository()->findById($userId);
-                    if ($user && $user->getRole() === User::ROLE_AUTHORITY) {
-                        $user->setActive($newStatus);
-                        $civicVoiceService->getUserRepository()->save($user);
-                        $success = "Authority status updated successfully!";
-                    } else {
-                        $error = "Authority not found.";
-                    }
+                        if ($user && $user->getRole() === User::ROLE_AUTHORITY) {
+                            // If deactivating, revert in-progress reports handled by this authority back to pending
+                            if (!$newStatus) {
+                                try {
+                                    // Find reports where this authority was the first to move from pending to non-pending and current status is in-progress
+                                    $stmtHandled = executeQuery(
+                                        "SELECT DISTINCT r.id FROM reports r
+                                         JOIN status_updates su ON r.id = su.report_id
+                                         WHERE su.updated_by_user_id = ?
+                                           AND su.old_status = 'pending'
+                                           AND su.new_status != 'pending'
+                                           AND r.status = 'in-progress'",
+                                        [$userId]
+                                    );
+                                    $handledReports = array_column($stmtHandled->fetchAll(), 'id');
+
+                                    if (!empty($handledReports)) {
+                                        $placeholders = implode(',', array_fill(0, count($handledReports), '?'));
+                                        // Revert reports to pending
+                                        $params = $handledReports;
+                                        executeQuery("UPDATE reports SET status = 'pending', updated_at = NOW() WHERE id IN ($placeholders)", $params);
+
+                                        // Remove status_updates created by this authority for these reports so others can claim them
+                                        executeQuery("DELETE FROM status_updates WHERE report_id IN ($placeholders) AND updated_by_user_id = ?", array_merge($handledReports, [$userId]));
+                                    }
+                                } catch (Exception $e) {
+                                    // Log but continue with deactivation
+                                    error_log('Failed to revert handled reports on authority deactivation: ' . $e->getMessage());
+                                }
+                            }
+
+                            $user->setActive($newStatus);
+                            $civicVoiceService->getUserRepository()->save($user);
+                            // Redirect to avoid blank page / form resubmission and show confirmation
+                            header('Location: dashboard.php?authority_toggled=1');
+                            exit;
+                        } else {
+                            $error = "Authority not found.";
+                        }
                 } catch (Exception $e) {
                     $error = "Failed to update authority status.";
                 }
@@ -97,7 +150,9 @@ if (hasRole('admin') && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
                                 // Use UserRepository to delete the user
                                 $civicVoiceService->getUserRepository()->delete($user);
-                                $success = "Authority account deleted successfully!";
+                                // Redirect to avoid blank page / form resubmission and show confirmation
+                                header('Location: dashboard.php?authority_deleted=1');
+                                exit;
                             } catch (Exception $e) {
                                 $error = "Failed to delete authority account.";
                             }
@@ -126,12 +181,28 @@ if (hasRole('citizen')) {
     // Authority stats using statistics method and countSearch
     $reportStats = $reportRepo->getStatistics();
     $totalReports = $reportStats['total_reports'];
-    $pending = $reportStats['by_status'][Report::STATUS_PENDING] ?? 0;
-    $inProgress = $reportStats['by_status'][Report::STATUS_IN_PROGRESS] ?? 0;
-    $rejectedCount = $reportStats['by_status'][Report::STATUS_REJECTED] ?? 0;
-    
-    // Resolved today - use executeQuery for date-specific query
-    $resolvedToday = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed' AND DATE(updated_at) = CURDATE()")->fetchColumn();
+    // For authority dashboard, counts for statuses should reflect issues handled by this authority only
+    $authHandledStmt = executeQuery(
+        "SELECT r.status, COUNT(DISTINCT r.id) as cnt
+         FROM reports r
+         JOIN status_updates su ON r.id = su.report_id
+         WHERE su.updated_by_user_id = ?
+         GROUP BY r.status",
+        [$user['id']]
+    );
+    $authHandledRows = $authHandledStmt->fetchAll();
+    $authHandled = [];
+    foreach ($authHandledRows as $row) {
+        $authHandled[$row['status']] = (int)$row['cnt'];
+    }
+
+    $pending = $authHandled[Report::STATUS_PENDING] ?? 0;
+    $inProgress = $authHandled[Report::STATUS_IN_PROGRESS] ?? 0;
+    $fixed = $authHandled[Report::STATUS_FIXED] ?? 0;
+    $rejectedCount = $authHandled[Report::STATUS_REJECTED] ?? 0;
+
+    // Resolved today by this authority - count status_updates where this authority set new_status = 'fixed' today
+    $resolvedToday = executeQuery("SELECT COUNT(*) FROM status_updates WHERE updated_by_user_id = ? AND new_status = 'fixed' AND DATE(updated_at) = CURDATE()", [$user['id']])->fetchColumn();
 } elseif (hasRole('admin')) {
     // Admin stats - comprehensive system analytics
     $userStats = $userRepo->getStatistics();
@@ -238,11 +309,14 @@ if (!hasRole('admin')) {
                     <?php endif; ?> -->
                 </ul>
                 <div class="nav-user">
-                    <div class="notification-area">
-                        <?php if (isLoggedIn()): ?>
-                            <?php $unreads = getUnreadNotifications($user['id'], 4); ?>
-                            <button class="btn btn-small btn-notify" onclick="toggleNotifications()">🔔 <?php echo count($unreads) ? '<span class="notify-count">'.count($unreads).'</span>' : ''; ?></button>
-                            <div id="notifyDropdown" class="notify-dropdown" style="display:none;">
+            <div class="notification-area">
+                <?php if (isLoggedIn()): ?>
+                <?php 
+                $unreadCount = isset($civicVoiceService) ? (int)$civicVoiceService->countUnreadNotifications($user['id']) : (int)executeQuery("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0", [$user['id']])->fetchColumn();
+                $unreads = getUnreadNotifications($user['id'], 4);
+                ?>
+                <button class="btn btn-small btn-notify" onclick="toggleNotifications()">🔔 <?php echo $unreadCount ? '<span class="notify-count">'.htmlspecialchars($unreadCount).'</span>' : ''; ?></button>
+                <div id="notifyDropdown" class="notify-dropdown" style="display:none;">
                                 <button class="notify-close" aria-label="Close notifications" onclick="closeAllDropdowns()">✕</button>
                                 <?php if (empty($unreads)): ?>
                                     <div class="notify-item">No new notifications</div>
@@ -318,8 +392,8 @@ if (!hasRole('admin')) {
                         <span class="stat-number"><?php echo $totalReports; ?></span>
                     </div>
                     <div class="stat-card">
-                        <h3>Pending Review</h3>
-                        <span class="stat-number pending"><?php echo $pending; ?></span>
+                        <h3>Rejected</h3>
+                        <span class="stat-number rejected"><?php echo $rejectedCount; ?></span>
                     </div>
                     <div class="stat-card">
                         <h3>In Progress</h3>
@@ -339,8 +413,8 @@ if (!hasRole('admin')) {
 
             <?php elseif (hasRole('admin')): ?>
                 <!-- Admin Dashboard -->
-                <?php if (isset($success)): ?>
-                    <div class="alert alert-success"><?php echo htmlspecialchars($success); ?></div>
+                <?php if (isset($success) || isset($_GET['authority_deleted']) || isset($_GET['authority_toggled']) || isset($_GET['authority_created'])): ?>
+                    <div class="alert alert-success"><?php echo htmlspecialchars($success ?? (isset($_GET['authority_deleted']) ? 'Authority account deleted successfully!' : (isset($_GET['authority_toggled']) ? 'Authority status updated successfully!' : 'Authority account created successfully!'))); ?></div>
                 <?php endif; ?>
                 <?php if (isset($error)): ?>
                     <div class="alert alert-error"><?php echo htmlspecialchars($error); ?></div>
@@ -510,7 +584,10 @@ if (!hasRole('admin')) {
                                                             <?php echo $authority['is_active'] ? 'Deactivate' : 'Activate'; ?>
                                                         </button>
                                                     </form>
-                                                    <?php if ($authority['total_updates'] == 0): ?>
+                                                    <?php
+                                                        // Allow deletion if the authority has no updates OR if it's a dummy/dev account (email ends with .test)
+                                                        $isDummyAccount = isset($authority['email']) && preg_match('/\.test$/', $authority['email']);
+                                                        if ($authority['total_updates'] == 0 || $isDummyAccount): ?>
                                                         <form method="POST" style="display: inline;" onsubmit="return confirm('Are you sure you want to delete this authority account?');">
                                                             <input type="hidden" name="action" value="delete_authority">
                                                             <input type="hidden" name="user_id" value="<?php echo $authority['id']; ?>">
@@ -574,6 +651,7 @@ if (!hasRole('admin')) {
                                         </div>
                                     <?php endforeach; ?>
                                 </div>
+                                <!-- Export buttons removed (use consolidated full export below) -->
                             </div>
 
                             <!-- System Health & Statistics -->
@@ -599,7 +677,11 @@ if (!hasRole('admin')) {
                                         <span class="health-label">User Authentication</span>
                                     </div>
                                 </div>
+                                <!-- Export buttons removed (use consolidated full export below) -->
                             </div>
+                        </div>
+                        <div style="margin-top:16px;">
+                            <a href="export_admin.php?type=full" class="btn btn-success" style="padding:12px 18px; font-size:1rem;">Export Full PDF</a>
                         </div>
                     </div>
                 </div>

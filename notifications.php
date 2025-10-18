@@ -63,15 +63,20 @@ $page_title = 'Notifications - CivicVoice';
                 <div class="nav-logo"><a href="dashboard.php">CivicVoice</a></div>
                 <ul class="nav-menu">
                     <li class="nav-item"><a href="dashboard.php" class="nav-link">Dashboard</a></li>
-                    <?php if (!hasAnyRole(['authority'])): ?>
+                    <?php if (!hasRole('admin') && !hasAnyRole(['authority'])): ?>
                     <li class="nav-item"><a href="report.php" class="nav-link">Report Issue</a></li>
                     <?php endif; ?>
+                    <?php if (!hasRole('admin')): ?>
                     <li class="nav-item"><a href="reports.php" class="nav-link">All reports</a></li>
+                    <?php endif; ?>
                 </ul>
                 <div class="nav-user">
                     <div class="notification-area">
-                        <?php $unreads = getUnreadNotifications($user['id'], 4); ?>
-                        <button class="btn btn-small btn-notify" onclick="location.href='notifications.php'">🔔 <?php echo count($unreads) ? '<span class="notify-count">'.count($unreads).'</span>' : ''; ?></button>
+                        <?php 
+                            $unreadCount = isset($civicVoiceService) ? (int)$civicVoiceService->countUnreadNotifications($user['id']) : (int)executeQuery("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0", [$user['id']])->fetchColumn();
+                            $unreads = getUnreadNotifications($user['id'], 4);
+                        ?>
+                        <button class="btn btn-small btn-notify" onclick="location.href='notifications.php'">🔔 <?php echo $unreadCount ? '<span class="notify-count">'.htmlspecialchars($unreadCount).'</span>' : ''; ?></button>
                     </div>
                     <div class="user-menu">
                         <span class="user-name"><?php echo htmlspecialchars(getUserDisplayName()); ?></span>

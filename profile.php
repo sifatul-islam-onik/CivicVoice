@@ -30,13 +30,36 @@ try {
 }
 
 // Fetch report stats based on user role
-if (hasAnyRole(['authority', 'admin'])) {
-    // Authority and admin see stats for ALL user issues
+if (hasRole('authority')) {
+    // For authorities, show counts for reports they handled (based on status_updates)
+    $authHandledStmt = executeQuery(
+        "SELECT r.status, COUNT(DISTINCT r.id) AS cnt
+         FROM reports r
+         JOIN status_updates su ON r.id = su.report_id
+         WHERE su.updated_by_user_id = ?
+         GROUP BY r.status",
+        [$user['id']]
+    );
+    $authHandledRows = $authHandledStmt->fetchAll();
+    $authHandled = [];
+    foreach ($authHandledRows as $row) {
+        $authHandled[$row['status']] = (int)$row['cnt'];
+    }
+
+    $myReports = (int)array_sum($authHandled);
+    $pending = $authHandled[Report::STATUS_PENDING] ?? 0;
+    $inProgress = $authHandled[Report::STATUS_IN_PROGRESS] ?? 0;
+    $fixed = $authHandled[Report::STATUS_FIXED] ?? 0;
+    $rejected = $authHandled[Report::STATUS_REJECTED] ?? 0;
+
+} elseif (hasRole('admin')) {
+    // Admins see stats for ALL user issues
     $myReports = executeQuery("SELECT COUNT(*) FROM reports")->fetchColumn();
     $pending = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'pending'")->fetchColumn();
     $inProgress = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'in-progress'")->fetchColumn();
     $fixed = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'fixed'")->fetchColumn();
     $rejected = executeQuery("SELECT COUNT(*) FROM reports WHERE status = 'rejected'")->fetchColumn();
+
 } else {
     // Citizens see only their own reports
     $myReports = executeQuery("SELECT COUNT(*) FROM reports WHERE user_id = ?", [$user['id']])->fetchColumn();
@@ -60,41 +83,73 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$u || !password_verify($currentPassword, $u['password_hash'])) {
                     $error = 'Incorrect password. Account not deleted.';
                 } else {
-                    // Delete user uploads: report photos and avatar
-                    $stmt = executeQuery("SELECT photo_path FROM reports WHERE user_id = ? AND photo_path IS NOT NULL", [$user['id']]);
-                    $photos = $stmt->fetchAll();
-                    foreach ($photos as $p) {
-                        if (!empty($p['photo_path']) && defined('UPLOAD_DIR') && UPLOAD_DIR) {
-                            $safe = basename($p['photo_path']);
-                            $path = rtrim(UPLOAD_DIR, '/\\') . DIRECTORY_SEPARATOR . $safe;
-                            if (file_exists($path) && is_file($path)) @unlink($path);
+                        // We'll explicitly delete reports and status updates inside a DB transaction
+                        $pdo = getDbConnection();
+                        try {
+                            $pdo->beginTransaction();
+
+                            // Fetch user's report photos to remove files after DB ops
+                            $stmt = executeQuery("SELECT id, photo_path FROM reports WHERE user_id = ?", [$user['id']]);
+                            $photos = $stmt->fetchAll();
+
+                            // Delete status_updates for reports owned by this user
+                            $reportIds = array_column($photos, 'id');
+                            if (!empty($reportIds)) {
+                                // prepare placeholders
+                                $placeholders = implode(',', array_fill(0, count($reportIds), '?'));
+                                executeQuery("DELETE FROM status_updates WHERE report_id IN ($placeholders)", $reportIds);
+                            }
+
+                            // Delete reports belonging to this user
+                            executeQuery("DELETE FROM reports WHERE user_id = ?", [$user['id']]);
+
+                            // Delete any user-generated status_updates (if your model stores updates by user separately)
+                            executeQuery("DELETE FROM status_updates WHERE updated_by_user_id = ?", [$user['id']]);
+
+                            // Finally delete the user row
+                            executeQuery("DELETE FROM users WHERE id = ?", [$user['id']]);
+
+                            $pdo->commit();
+
+                            // Remove files from disk (photos + avatar) after successful DB transaction
+                            foreach ($photos as $p) {
+                                if (!empty($p['photo_path']) && defined('UPLOAD_DIR') && UPLOAD_DIR) {
+                                    $safe = basename($p['photo_path']);
+                                    $path = rtrim(UPLOAD_DIR, '/\\') . DIRECTORY_SEPARATOR . $safe;
+                                    if (file_exists($path) && is_file($path)) {
+                                        @unlink($path);
+                                    }
+                                }
+                            }
+
+                            // Delete avatar if exists
+                            $avatarPath = __DIR__ . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'avatars' . DIRECTORY_SEPARATOR . $user['id'] . '.jpg';
+                            if (file_exists($avatarPath) && is_file($avatarPath)) @unlink($avatarPath);
+
+                            // Notify all active authorities that this user deleted their account
+                            try {
+                                $stmtAuth = executeQuery("SELECT id, full_name, email FROM users WHERE role = 'authority' AND is_active = 1", []);
+                                $authorities = $stmtAuth->fetchAll();
+                                foreach ($authorities as $auth) {
+                                    $notifTitle = 'User account deleted';
+                                    $notifBody = sprintf('User "%s" has deleted their account.', $user['full_name']);
+                                    createNotification($auth['id'], $notifTitle, $notifBody);
+                                }
+                            } catch (Exception $e) {
+                                error_log('Failed to notify authorities on account deletion: ' . $e->getMessage());
+                            }
+
+                            // Logout and redirect
+                            logout();
+                            header('Location: index.php?account_deleted=1');
+                            exit;
+
+                        } catch (Exception $e) {
+                            // Rollback and log
+                            if ($pdo->inTransaction()) $pdo->rollBack();
+                            error_log('Account deletion transaction failed: ' . $e->getMessage());
+                            $error = 'Failed to delete account. Please try again later.';
                         }
-                    }
-
-                    // Delete avatar if exists
-                    $avatarPath = __DIR__ . DIRECTORY_SEPARATOR . 'uploads' . DIRECTORY_SEPARATOR . 'avatars' . DIRECTORY_SEPARATOR . $user['id'] . '.jpg';
-                    if (file_exists($avatarPath) && is_file($avatarPath)) @unlink($avatarPath);
-
-                    // Notify all active authorities that this user deleted their account
-                    try {
-                        $stmtAuth = executeQuery("SELECT id, full_name, email FROM users WHERE role = 'authority' AND is_active = 1", []);
-                        $authorities = $stmtAuth->fetchAll();
-                        foreach ($authorities as $auth) {
-                            $notifTitle = 'User account deleted';
-                            $notifBody = sprintf('User "%s" has deleted their account.', $user['full_name']);
-                            createNotification($auth['id'], $notifTitle, $notifBody);
-                        }
-                    } catch (Exception $e) {
-                        error_log('Failed to notify authorities on account deletion: ' . $e->getMessage());
-                    }
-
-                    // Delete the user (cascade will remove reports, comments, status_updates)
-                    executeQuery("DELETE FROM users WHERE id = ?", [$user['id']]);
-
-                    // Logout and redirect
-                    logout();
-                    header('Location: index.php?account_deleted=1');
-                    exit;
                 }
             } catch (Exception $e) {
                 error_log('Account deletion error: ' . $e->getMessage());
@@ -211,10 +266,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <h4><?php echo hasAnyRole(['authority', 'admin']) ? 'Total Issues' : 'Total Issued'; ?></h4>
                     <div class="stat-number"><?php echo $myReports; ?></div>
                 </div>
+                <?php if (!hasRole('authority')): ?>
                 <div class="stat-card">
                     <h4>Pending</h4>
                     <div class="stat-number"><?php echo $pending; ?></div>
                 </div>
+                <?php endif; ?>
                 <div class="stat-card">
                     <h4>In Progress</h4>
                     <div class="stat-number"><?php echo $inProgress; ?></div>

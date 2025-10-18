@@ -172,8 +172,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <div class="nav-user">
                     <div class="notification-area">
                         <?php if (isLoggedIn()): ?>
-                            <?php $unreads = getUnreadNotifications($user['id'], 4); ?>
-                            <button class="btn btn-small btn-notify" onclick="toggleNotifications()">🔔 <?php echo count($unreads) ? '<span class="notify-count">'.count($unreads).'</span>' : ''; ?></button>
+                            <?php 
+                                $unreadCount = isset($civicVoiceService) ? (int)$civicVoiceService->countUnreadNotifications($user['id']) : (int)executeQuery("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0", [$user['id']])->fetchColumn();
+                                $unreads = getUnreadNotifications($user['id'], 4);
+                            ?>
+                            <button class="btn btn-small btn-notify" onclick="toggleNotifications()">🔔 <?php echo $unreadCount ? '<span class="notify-count">'.htmlspecialchars($unreadCount).'</span>' : ''; ?></button>
                             <div id="notifyDropdown" class="notify-dropdown" style="display:none;">
                                 <button class="notify-close" aria-label="Close notifications" onclick="closeAllDropdowns()">✕</button>
                                 <?php if (empty($unreads)): ?>

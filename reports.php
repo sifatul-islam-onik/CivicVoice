@@ -75,14 +75,64 @@ if (
     $updateNote = isset($_POST['update_note']) ? trim($_POST['update_note']) : null;
 
     try {
+        // Enforce authority handling rules:
+        // - The first authority who changes a report from 'pending' to something else becomes the handler.
+        // - Only that handler (or an admin) may update the status further.
+        if (hasRole('authority')) {
+            // Find handler: earliest status_update that moved from pending -> non-pending
+            $handlerStmt = executeQuery(
+                "SELECT updated_by_user_id FROM status_updates WHERE report_id = ? AND old_status = 'pending' AND new_status != 'pending' ORDER BY updated_at ASC LIMIT 1",
+                [$reportId]
+            );
+            $handlerRow = $handlerStmt->fetch();
+            $handlerId = $handlerRow ? (int)$handlerRow['updated_by_user_id'] : null;
+
+            // If changing from pending to non-pending and handler exists and is not current user => deny
+            if ($oldStatus === 'pending' && $newStatus !== 'pending' && $handlerId && $handlerId !== $user['id']) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'message' => 'This report has already been claimed by another authority.']);
+                exit;
+            }
+
+            // If report already has a handler (first mover) and current user is not the handler, deny further updates
+            if ($handlerId && $handlerId !== $user['id']) {
+                http_response_code(403);
+                echo json_encode(['success' => false, 'message' => 'Only the authority who claimed this report may update its status.']);
+                exit;
+            }
+        }
+
         // Update report status
         executeQuery("UPDATE reports SET status = ?, updated_at = NOW() WHERE id = ?", [$newStatus, $reportId]);
 
         // Log status update (include note)
-        executeQuery(
-            "INSERT INTO status_updates (report_id, updated_by_user_id, old_status, new_status, update_note) VALUES (?, ?, ?, ?, ?)",
-            [$reportId, $user['id'], $oldStatus, $newStatus, $updateNote]
-        );
+        // If this user already has a most-recent status_update for this report, update that row instead of inserting a new one
+        try {
+            $lastStmt = executeQuery(
+                "SELECT id FROM status_updates WHERE report_id = ? AND updated_by_user_id = ? ORDER BY updated_at DESC LIMIT 1",
+                [$reportId, $user['id']]
+            );
+            $last = $lastStmt->fetch();
+            if ($last && isset($last['id'])) {
+                // Update the existing status_update row
+                executeQuery(
+                    "UPDATE status_updates SET old_status = ?, new_status = ?, update_note = ?, updated_at = NOW() WHERE id = ?",
+                    [$oldStatus, $newStatus, $updateNote, $last['id']]
+                );
+            } else {
+                // Insert a fresh status update
+                executeQuery(
+                    "INSERT INTO status_updates (report_id, updated_by_user_id, old_status, new_status, update_note) VALUES (?, ?, ?, ?, ?)",
+                    [$reportId, $user['id'], $oldStatus, $newStatus, $updateNote]
+                );
+            }
+        } catch (Exception $e) {
+            // Fallback to insert on any error
+            executeQuery(
+                "INSERT INTO status_updates (report_id, updated_by_user_id, old_status, new_status, update_note) VALUES (?, ?, ?, ?, ?)",
+                [$reportId, $user['id'], $oldStatus, $newStatus, $updateNote]
+            );
+        }
 
         // Notify the original reporter about the status change
         try {
@@ -100,6 +150,27 @@ if (
             }
         } catch (Exception $e) {
             error_log('Failed to create notification for reporter: ' . $e->getMessage());
+        }
+
+        // Additionally notify admins when an authority resolves or rejects an issue
+        try {
+            if (in_array($newStatus, ['fixed', 'rejected'], true)) {
+                // Compose admin notification
+                $adminTitle = $newStatus === 'fixed' ? sprintf('Report resolved: %s', $titleStr) : sprintf('Report rejected: %s', $titleStr);
+                $adminBody = sprintf('Report "%s" was marked %s by %s.', $titleStr, $newStatus, htmlspecialchars($user['full_name'] ?? $user['username'] ?? 'an authority'));
+                if ($newStatus === 'rejected' && $updateNote) {
+                    $adminBody .= ' Reason: ' . $updateNote;
+                }
+
+                // Fetch active admin users
+                $adminsStmt = executeQuery("SELECT id FROM users WHERE role = 'admin' AND is_active = 1");
+                $admins = $adminsStmt->fetchAll();
+                foreach ($admins as $adm) {
+                    createNotification($adm['id'], $adminTitle, $adminBody);
+                }
+            }
+        } catch (Exception $e) {
+            error_log('Failed to notify admins on status change: ' . $e->getMessage());
         }
 
         echo json_encode(['success' => true, 'message' => 'Status updated']);
@@ -193,8 +264,11 @@ if (
                 <div class="nav-user">
                     <div class="notification-area">
                         <?php if (isLoggedIn()): ?>
-                            <?php $unreads = getUnreadNotifications($user['id'], 4); ?>
-                            <button class="btn btn-small btn-notify" onclick="toggleNotifications()">🔔 <?php echo count($unreads) ? '<span class="notify-count">'.count($unreads).'</span>' : ''; ?></button>
+                            <?php 
+                                $unreadCount = isset($civicVoiceService) ? (int)$civicVoiceService->countUnreadNotifications($user['id']) : (int)executeQuery("SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0", [$user['id']])->fetchColumn();
+                                $unreads = getUnreadNotifications($user['id'], 4);
+                            ?>
+                            <button class="btn btn-small btn-notify" onclick="toggleNotifications()">🔔 <?php echo $unreadCount ? '<span class="notify-count">'.htmlspecialchars($unreadCount).'</span>' : ''; ?></button>
                             <div id="notifyDropdown" class="notify-dropdown" style="display:none;">
                                 <button class="notify-close" aria-label="Close notifications" onclick="closeAllDropdowns()">✕</button>
                                 <?php if (empty($unreads)): ?>
